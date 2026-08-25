@@ -1534,15 +1534,10 @@ function wireUI() {
     const shown = togglePanel('#panel-section');
     if (shown) { $('#clip-on').checked = true; state.clip.enabled = true; updateClipping(); }
   });
-  $('#btn-section-dock')?.addEventListener('click', () => {
-    const shown = togglePanel('#panel-section');
-    if (shown) { $('#clip-on').checked = true; state.clip.enabled = true; updateClipping(); }
-  });
   $('#btn-help').addEventListener('click', () => togglePanel('#panel-help'));
   $('#btn-help-dock')?.addEventListener('click', () => togglePanel('#panel-help'));
   $('#btn-info').addEventListener('click', () => $('#panel-info').classList.toggle('hidden'));
   $('#btn-more-dock')?.addEventListener('click', () => togglePanel('#panel-settings'));
-  $('#btn-sidebar-dock')?.addEventListener('click', toggleSidebar);
   $('#btn-snap')?.addEventListener('click', snapshot);
 
   $$('#viewcube button').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
