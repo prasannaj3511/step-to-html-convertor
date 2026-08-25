@@ -54,9 +54,12 @@ const state = {
   lastCalls: 0,
   lastTris: 0,
   renderCount: 0,
-  shading: CFG.shading || 'shaded',
+  shading: CFG.shading === 'shaded-wire' ? 'shaded' : (CFG.shading || 'shaded'),
+  shadedWire: CFG.shading === 'shaded-wire',
+  machineTransparent: false,
   tone: CFG.tone || 'neutral',
   modelIndex: CFG.modelIndex || 0,
+  homeView: null,
 };
 
 /* --------------------------------------------------------------- renderer */
@@ -287,9 +290,11 @@ function disposeModel() {
   state.edgesBuilt = false;
   state.edgeGroup = null;
   state.explode = 0;
+  state.machineTransparent = false;
   state.frameTimes = [];
   $('#btn-edges')?.classList.remove('active');
   $('#btn-isolate')?.classList.remove('active');
+  setMachineButtonState();
 }
 
 async function switchModel(index) {
@@ -325,6 +330,8 @@ async function switchModel(index) {
     await loadModel(entry.model);
     // Shading is a viewer preference, so carry it across the switch.
     if (state.shading === 'flat') setShading('flat');
+    if (state.shadedWire) await setShadedWire(true);
+    if (state.machineTransparent) applyMachineTransparency(true);
     toast(`Loaded ${entry.title || entry.name}`);
   } catch (err) {
     failLoad(err);
@@ -381,8 +388,32 @@ function setShading(mode) {
   renderer.toneMapping = mode === 'flat'
     ? THREE.NoToneMapping
     : (TONE_MAPPINGS[state.tone] ?? THREE.NeutralToneMapping);
+  if (state.machineTransparent) applyMachineTransparency(true);
   forEachMaterial((m) => { m.needsUpdate = true; });
   updateSelectionUI();
+  requestRender();
+}
+
+function syncShadedWireUI() {
+  const opt = $('#opt-shaded-wire');
+  if (opt) opt.checked = !!state.shadedWire;
+}
+
+async function setShadedWire(enabled) {
+  if (enabled && state.shading !== 'shaded') {
+    const shadingSelect = $('#opt-shading');
+    if (shadingSelect) shadingSelect.value = 'shaded';
+    setShading('shaded');
+  }
+  state.shadedWire = enabled;
+  if (enabled) {
+    if (!state.edgesBuilt) await buildEdges();
+    if (state.edgeGroup) state.edgeGroup.visible = true;
+  } else if (state.edgeGroup) {
+    state.edgeGroup.visible = false;
+  }
+  $('#btn-edges')?.classList.toggle('active', !!state.edgeGroup?.visible);
+  syncShadedWireUI();
   requestRender();
 }
 
@@ -393,6 +424,43 @@ function setToneMapping(name) {
     forEachMaterial((m) => { m.needsUpdate = true; });
   }
   requestRender();
+}
+
+function setMachineButtonState() {
+  $('#btn-theme-chip')?.classList.toggle('active', !state.machineTransparent);
+}
+
+function applyMachineTransparency(enabled) {
+  if (!state.root) return;
+  clearSelection();
+  state.root.traverse((o) => {
+    if (!o.isMesh) return;
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    for (const m of mats) {
+      if (!m) continue;
+      if (!m.userData._machineSurface) {
+        m.userData._machineSurface = {
+          transparent: !!m.transparent,
+          opacity: typeof m.opacity === 'number' ? m.opacity : 1,
+          depthWrite: 'depthWrite' in m ? !!m.depthWrite : true,
+        };
+      }
+      const base = m.userData._machineSurface;
+      m.transparent = enabled ? true : base.transparent;
+      m.opacity = enabled ? 0.2 : base.opacity;
+      if ('depthWrite' in m) m.depthWrite = enabled ? false : base.depthWrite;
+      m.needsUpdate = true;
+    }
+  });
+  state.machineTransparent = enabled;
+  setMachineButtonState();
+  updateSelectionUI();
+  requestRender();
+}
+
+function toggleMachineTransparency() {
+  applyMachineTransparency(!state.machineTransparent);
+  toast(state.machineTransparent ? 'Machine transparent' : 'Machine view restored');
 }
 
 /**
@@ -546,6 +614,11 @@ function frameBounds() {
   scene.add(keyLight.target, fillLight.target, rimLight.target);
 
   setView('iso', false);
+  state.homeView = {
+    position: camera.position.clone(),
+    target: controls.target.clone(),
+    up: camera.up.clone(),
+  };
 }
 
 function buildGrid() {
@@ -656,6 +729,15 @@ function moveCamera(pos, target, animate = true) {
     toTgt: target.clone(),
   };
   requestRender();
+}
+
+function goHome(animate = true) {
+  if (!state.homeView) {
+    fitTo(state.bounds, animate);
+    return;
+  }
+  camera.up.copy(state.homeView.up);
+  moveCamera(state.homeView.position, state.homeView.target, animate);
 }
 
 function stepCameraAnim(now) {
@@ -1092,6 +1174,8 @@ async function buildEdges(thresholdDeg = 28) {
   if (state.edgesBuilt) {
     state.edgeGroup.visible = !state.edgeGroup.visible;
     $('#btn-edges')?.classList.toggle('active', state.edgeGroup.visible);
+    state.shadedWire = !!state.edgeGroup.visible;
+    syncShadedWireUI();
     requestRender();
     return;
   }
@@ -1158,7 +1242,10 @@ async function buildEdges(thresholdDeg = 28) {
   scene.add(group);
   state.edgeGroup = group;
   state.edgesBuilt = true;
+  state.edgeGroup.visible = true;
   $('#btn-edges')?.classList.add('active');
+  state.shadedWire = true;
+  syncShadedWireUI();
   requestRender();
   toast(`Edges built in ${((performance.now() - t0) / 1000).toFixed(1)}s`);
 }
@@ -1421,7 +1508,7 @@ function wireUI() {
   $('#btn-sidebar').addEventListener('click', toggleSidebar);
   $('#btn-fit')?.addEventListener('click', () => fitTo(state.bounds));
   const btnHome = $('#btn-home');
-  if (btnHome) btnHome.addEventListener('click', () => fitTo(state.bounds));
+  if (btnHome) btnHome.addEventListener('click', () => goHome());
   const btnPan = $('#btn-pan');
   if (btnPan) btnPan.addEventListener('click', () => toast('Use right mouse drag to pan'));
   const btnExpand = $('#btn-expand');
@@ -1431,7 +1518,7 @@ function wireUI() {
     else if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
   });
   const btnThemeChip = $('#btn-theme-chip');
-  if (btnThemeChip) btnThemeChip.addEventListener('click', () => toast('Machine view active'));
+  if (btnThemeChip) btnThemeChip.addEventListener('click', toggleMachineTransparency);
   const btnPartChip = $('#btn-part-chip');
   if (btnPartChip) btnPartChip.addEventListener('click', () => {
     if (state.selected) toast(state.selected.name || 'Part selected');
@@ -1447,8 +1534,15 @@ function wireUI() {
     const shown = togglePanel('#panel-section');
     if (shown) { $('#clip-on').checked = true; state.clip.enabled = true; updateClipping(); }
   });
+  $('#btn-section-dock')?.addEventListener('click', () => {
+    const shown = togglePanel('#panel-section');
+    if (shown) { $('#clip-on').checked = true; state.clip.enabled = true; updateClipping(); }
+  });
   $('#btn-help').addEventListener('click', () => togglePanel('#panel-help'));
+  $('#btn-help-dock')?.addEventListener('click', () => togglePanel('#panel-help'));
   $('#btn-info').addEventListener('click', () => $('#panel-info').classList.toggle('hidden'));
+  $('#btn-more-dock')?.addEventListener('click', () => togglePanel('#panel-settings'));
+  $('#btn-sidebar-dock')?.addEventListener('click', toggleSidebar);
   $('#btn-snap')?.addEventListener('click', snapshot);
 
   $$('#viewcube button').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
@@ -1463,7 +1557,11 @@ function wireUI() {
     searchTimer = setTimeout(() => applyFilter(search.value), 220);
   });
 
-  $('#opt-shading').addEventListener('change', (e) => setShading(e.target.value));
+  $('#opt-shading').addEventListener('change', (e) => {
+    setShading(e.target.value);
+    if (e.target.value !== 'shaded' && state.shadedWire) setShadedWire(false);
+  });
+  $('#opt-shaded-wire')?.addEventListener('change', (e) => { setShadedWire(e.target.checked); });
   $('#opt-tone').addEventListener('change', (e) => setToneMapping(e.target.value));
   $('#opt-theme').addEventListener('change', (e) => applyTheme(e.target.value));
   $('#opt-grid').addEventListener('change', (e) => { grid.visible = e.target.checked; requestRender(); });
@@ -1594,7 +1692,9 @@ async function boot() {
   applyTheme(CFG.theme || 'dark');
   setupEnvironment();
   wireUI();
+  setMachineButtonState();
   $('#opt-shading').value = state.shading;
+  syncShadedWireUI();
   $('#opt-tone').value = state.tone;
   $('#opt-theme').value = CFG.theme || 'dark';
   $('#opt-grid').checked = CFG.showGrid !== false;
@@ -1607,6 +1707,8 @@ async function boot() {
   try {
     await loadModel();
     if (state.shading !== 'shaded') setShading(state.shading);
+    if (state.shadedWire) await setShadedWire(true);
+    if (state.machineTransparent) applyMachineTransparency(true);
     if (state.tone !== 'neutral') setToneMapping(state.tone);
   } catch (err) {
     failLoad(err);

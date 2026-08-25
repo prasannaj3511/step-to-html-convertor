@@ -248,6 +248,95 @@ button.tb:focus-visible, .tb:focus-visible { outline: 2px solid var(--accent); o
 [data-theme="light"] #viewcube button { background: rgba(255,255,255,.85); }
 #viewcube button:hover { color: var(--text); border-color: var(--accent); }
 
+#bottom-dock {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 6px;
+  padding: 0 12px;
+  max-width: calc(100% - 24px);
+  overflow-x: auto;
+  overflow-y: hidden;
+  pointer-events: auto;
+  scrollbar-width: none;
+}
+
+#bottom-dock::-webkit-scrollbar { display: none; }
+
+.dock-btn,
+.dock-pill {
+  height: auto;
+  border: 1px solid rgba(209, 214, 221, 0.9);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.96);
+  color: #a6a8ad;
+  box-shadow: 0 10px 24px rgba(26, 32, 44, 0.12);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(14px);
+  transition: transform .14s ease, box-shadow .14s ease, color .14s ease, background .14s ease;
+}
+
+.dock-btn {
+  width: auto;
+  min-width: 0;
+  flex: 0 0 auto;
+  padding: 3px;
+}
+
+.dock-pill {
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 3px 10px;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -.02em;
+  white-space: nowrap;
+}
+
+.dock-btn:hover,
+.dock-pill:hover {
+  transform: translateY(-1px);
+  color: #2f9adf;
+  box-shadow: 0 16px 34px rgba(26, 32, 44, 0.18);
+}
+
+.dock-btn.active,
+.dock-pill.active {
+  color: #2f9adf;
+}
+
+.dock-pill:not(.active) {
+  background: rgba(230, 230, 230, 0.96);
+  color: #a7a7a7;
+}
+
+.dock-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  line-height: 1;
+}
+
+.dock-icon svg {
+  width: 22px;
+  height: 22px;
+  fill: currentColor;
+}
+
+#bottom-dock button .dock-icon:not(:first-of-type) {
+  display: none;
+}
+
 /* ---------------------------------------------------------------- panels */
 
 .panel {
@@ -353,4 +442,31 @@ kbd {
   #sidebar { position: absolute; inset: 0 auto 0 0; z-index: 15; box-shadow: var(--shadow); }
   #topbar .brand small { display: none; }
   .tb-label { display: none; }
+  #bottom-dock {
+    gap: 6px;
+    bottom: 10px;
+    padding: 0 6px;
+  }
+  .dock-btn {
+    width: auto;
+    min-width: 0;
+    height: auto;
+    padding: 3px;
+    border-radius: 14px;
+  }
+  .dock-pill {
+    min-width: 0;
+    height: auto;
+    padding: 3px 8px;
+    border-radius: 14px;
+    font-size: 14px;
+  }
+  .dock-icon {
+    width: 19px;
+    height: 19px;
+  }
+  .dock-icon svg {
+    width: 19px;
+    height: 19px;
+  }
 }
