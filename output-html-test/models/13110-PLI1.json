@@ -1,0 +1,54 @@
+{
+  "generator": "iSTP2HTML 1.0.0",
+  "generatedAt": "2026-08-24T20:57:41",
+  "source": {
+    "file": "13110-PLI1.STEP",
+    "bytes": 357157278,
+    "schema": "CONFIG_CONTROL_DESIGN",
+    "originatingSystem": "SolidWorks 2024",
+    "preprocessor": "SwSTEP 2.0",
+    "timestamp": "2026-04-30T21:29:03",
+    "name": "20253188.STEP"
+  },
+  "model": {
+    "file": "models/13110-PLI1.glb",
+    "bytes": 8394320,
+    "units": "MM",
+    "unitScale": 1000.0,
+    "upAxis": "Y",
+    "compressed": true
+  },
+  "stats": {
+    "uniqueParts": 725,
+    "instances": 3326,
+    "placements": 5038,
+    "assemblies": 189,
+    "roots": 1,
+    "faces": 96552,
+    "uniqueTriangles": 1319898,
+    "renderedTriangles": 5411304,
+    "uniqueVertices": 1412110,
+    "meshFailures": 0,
+    "quality": "draft",
+    "conversionSeconds": 68.2,
+    "rawGlbBytes": 43792580,
+    "finalGlbBytes": 8394320,
+    "hadAuthoredColors": false
+  },
+  "bbox": {
+    "min": [
+      -2780.1917691682092,
+      -1585.0870001000003,
+      -3469.3291731568447
+    ],
+    "max": [
+      1847.8500001000002,
+      2279.6500001,
+      2070.1000001
+    ]
+  },
+  "environment": {
+    "python": "3.13.2",
+    "platform": "macOS-26.5.2-arm64-arm-64bit-Mach-O"
+  }
+}

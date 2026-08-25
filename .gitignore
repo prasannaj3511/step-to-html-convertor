@@ -1,0 +1,19 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Node (gltfpack + vendored three.js source)
+tools/node_modules/
+tools/package-lock.json
+
+# Generated output. Delete these lines if you want to commit a built viewer.
+output-html/
+
+# Large CAD inputs are usually tracked elsewhere (LFS, PDM, etc.)
+input-stp/*.STEP
+input-stp/*.step
+input-stp/*.stp

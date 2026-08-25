@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "istp2html"
+version = "1.0.0"
+description = "Convert STEP (ISO 10303-21) CAD files into optimized, self-contained HTML viewers"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "cadquery-ocp>=7.9",
+    "numpy>=2.0",
+]
+
+[project.scripts]
+stp2html = "stp2html.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+stp2html = ["assets/*"]

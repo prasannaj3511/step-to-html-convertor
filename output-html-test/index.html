@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="generator" content="iSTP2HTML 1.0.0">
+<title>13110-PLI1</title>
+<!-- Inlined so the page never issues a stray favicon.ico request. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2314171c'/%3E%3Cpath d='M16 5l9 5.2v10.6L16 26l-9-5.2V10.2z' fill='none' stroke='%234da3ff' stroke-width='2' stroke-linejoin='round'/%3E%3Cpath d='M16 5v10.5m0 0l9-5.3m-9 5.3l-9-5.3m9 5.3V26' fill='none' stroke='%234da3ff' stroke-width='1.4' opacity='.65'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/viewer.css">
+</head>
+<body>
+<div id="app">
+
+  <div id="topbar">
+    <div class="brand"><span id="brand-title">13110-PLI1</span> <small id="brand-sub">725 parts &middot; 5,038 placements &middot; 5.4M triangles</small></div>
+
+    <div class="tb-group hidden" id="model-switch">
+      <label for="model-select" class="tb-label" style="color:var(--text-faint)">Model</label>
+      <select id="model-select" title="Switch to another converted model"></select>
+    </div>
+
+    <div class="tb-sep"></div>
+    <div class="tb-group">
+      <button class="tb" id="btn-sidebar" title="Toggle model tree (B)">&#9776;<span class="tb-label"> Tree</span></button>
+      <button class="tb" id="btn-hide" title="Hide selected part (H)">Hide</button>
+      <button class="tb" id="btn-showall" title="Show everything (R)">Show all</button>
+    </div>
+
+    <div class="tb-sep"></div>
+    <div class="tb-group">
+      <button class="tb" id="btn-section" title="Section plane">Section</button>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="tb-group">
+      <button class="tb" id="btn-info" title="Model information">Info</button>
+      <button class="tb" id="btn-settings" title="Display settings">Settings</button>
+      <button class="tb" id="btn-help" title="Keyboard shortcuts (?)">?</button>
+    </div>
+  </div>
+
+  <div id="body">
+
+    <aside id="sidebar">
+      <div class="side-head">
+        <input type="search" id="tree-search" placeholder="Filter parts by name&hellip;" autocomplete="off" spellcheck="false">
+      </div>
+      <div id="tree-wrap"></div>
+    </aside>
+
+    <main id="stage">
+      <canvas id="canvas"></canvas>
+
+      <div id="overlay-tl"><div id="hud"></div></div>
+      <div id="overlay-br"><div id="axis-note">mm &middot; Y-up</div></div>
+
+      <div id="viewcube">
+        <button data-view="top" title="Top (5)">Top</button>
+        <button data-view="front" title="Front (1)">Front</button>
+        <button data-view="iso" title="Isometric (0)">Iso</button>
+        <button data-view="left" title="Left (3)">Left</button>
+        <button data-view="bottom" title="Bottom (6)">Bot</button>
+        <button data-view="right" title="Right (4)">Right</button>
+        <button data-view="back" title="Back (2)">Back</button>
+      </div>
+
+      <!-- panels -->
+      <div class="panel hidden" id="panel-settings">
+        <h3>Display <button title="Close">&times;</button></h3>
+        <div class="row"><label for="opt-shading" title="Flat shows the exact colour assigned in CAD">Shading</label>
+          <select id="opt-shading">
+            <option value="shaded">Shaded</option>
+            <option value="flat">Flat (exact CAD colour)</option>
+          </select></div>
+        <div class="row"><label for="opt-tone" title="Tone curves alter saturated colours">Tone mapping</label>
+          <select id="opt-tone">
+            <option value="neutral">Neutral</option>
+            <option value="none">None (literal)</option>
+            <option value="aces">ACES filmic</option>
+          </select></div>
+        <div class="row"><label for="opt-theme">Theme</label>
+          <select id="opt-theme"><option value="dark">Dark</option><option value="light">Light</option></select></div>
+        <div class="row"><label for="opt-grid">Ground grid</label>
+          <input type="checkbox" id="opt-grid" checked></div>
+        <div class="row"><label for="opt-backface">Backface culling</label>
+          <input type="checkbox" id="opt-backface" checked></div>
+        <div class="row"><label for="opt-metal">Metalness</label>
+          <input type="range" id="opt-metal" min="0" max="1" step="0.01" value="0.12">
+          <span class="val" id="opt-metal-val">0.12</span></div>
+        <div class="row"><label for="opt-rough">Roughness</label>
+          <input type="range" id="opt-rough" min="0.05" max="1" step="0.01" value="0.52">
+          <span class="val" id="opt-rough-val">0.52</span></div>
+        <div class="row"><label for="opt-exposure">Exposure</label>
+          <input type="range" id="opt-exposure" min="0.2" max="2.5" step="0.01" value="1">
+          <span class="val" id="opt-exposure-val">1.00</span></div>
+        <div class="row"><label for="opt-fov">Field of view</label>
+          <input type="range" id="opt-fov" min="15" max="80" step="1" value="45">
+          <span class="val" id="opt-fov-val">45</span></div>
+        <div class="row"><label for="opt-explode">Explode</label>
+          <input type="range" id="opt-explode" min="0" max="1" step="0.01" value="0">
+          <span class="val" id="opt-explode-val">0.00</span></div>
+      </div>
+
+      <div class="panel hidden" id="panel-section">
+        <h3>Section plane <button title="Close">&times;</button></h3>
+        <div class="row"><label for="clip-on">Enabled</label><input type="checkbox" id="clip-on"></div>
+        <div class="row"><label for="clip-axis">Axis</label>
+          <select id="clip-axis"><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></select></div>
+        <div class="row"><label for="clip-flip">Flip side</label><input type="checkbox" id="clip-flip"></div>
+        <div class="row"><label for="clip-pos">Position</label>
+          <input type="range" id="clip-pos" min="0" max="1" step="0.005" value="1">
+          <span class="val" id="clip-pos-val">1.00</span></div>
+      </div>
+
+      <div class="panel hidden" id="panel-help">
+        <h3>Shortcuts <button title="Close">&times;</button></h3>
+        <table id="help-table">
+          <tr><td><kbd>LMB</kbd> drag</td><td>Rotate (free, any direction)</td></tr>
+          <tr><td><kbd>RMB</kbd> drag</td><td>Pan</td></tr>
+          <tr><td>Wheel</td><td>Zoom</td></tr>
+          <tr><td><kbd>Click</kbd></td><td>Select part</td></tr>
+          <tr><td><kbd>Dbl-click</kbd></td><td>Zoom to part</td></tr>
+          <tr><td><kbd>A</kbd></td><td>Fit all</td></tr>
+          <tr><td><kbd>F</kbd></td><td>Fit selection</td></tr>
+          <tr><td><kbd>I</kbd> / <kbd>H</kbd> / <kbd>R</kbd></td><td>Isolate / Hide / Reset</td></tr>
+          <tr><td><kbd>G</kbd></td><td>Grid</td></tr>
+          <tr><td><kbd>B</kbd></td><td>Tree panel</td></tr>
+          <tr><td><kbd>0</kbd>&ndash;<kbd>6</kbd></td><td>Standard views</td></tr>
+          <tr><td><kbd>Esc</kbd></td><td>Clear selection</td></tr>
+        </table>
+      </div>
+
+      <div class="panel hidden" id="panel-info">
+        <h3>Model <button title="Close">&times;</button></h3>
+        <div id="model-info"></div>
+        <h3 style="margin-top:14px">Selection</h3>
+        <div id="sel-info"><span style="color:var(--text-faint)">No selection &mdash; click a part</span></div>
+      </div>
+
+      <div id="toast"></div>
+
+      <div id="loader">
+        <div class="title">13110-PLI1</div>
+        <div class="bar"><i></i></div>
+        <div class="sub">starting&hellip;</div>
+        <div class="hint hidden">
+          If this page was opened directly from disk, the browser blocks reading the
+          model file for security reasons. Serve the folder over HTTP instead &mdash;
+          from the output folder run <code>python serve.py</code> (or
+          <code>npx serve</code>) and open the address it prints.
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script>window.__ISTP2HTML__ = {"model":"models/13110-PLI1.glb","title":"13110-PLI1","units":"mm","unitScale":1000.0,"theme":"dark","showGrid":true,"shading":"shaded","meta":{"source":{"file":"13110-PLI1.STEP","bytes":357157278,"schema":"CONFIG_CONTROL_DESIGN","originatingSystem":"SolidWorks 2024","preprocessor":"SwSTEP 2.0","timestamp":"2026-04-30T21:29:03","name":"20253188.STEP"},"model":{"file":"models/13110-PLI1.glb","bytes":8394320,"units":"MM","unitScale":1000.0,"upAxis":"Y","compressed":true},"stats":{"uniqueParts":725,"placements":5038,"instances":3326,"quality":"draft","uniqueTriangles":1319898,"renderedTriangles":5411304,"conversionSeconds":68.2}}};</script>
+<script type="importmap">
+{
+  "imports": {
+    "three": "./assets/three/build/three.module.min.js",
+    "three/addons/": "./assets/three/examples/jsm/"
+  }
+}
+</script>
+<script type="module" src="assets/viewer.js"></script>
+</body>
+</html>
