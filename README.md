@@ -189,7 +189,7 @@ Inputs may be files or directories; with none given it reads `input-stp/`.
 | `--position-bits N` | position quantization (default 16 ≈ lossless) |
 | `--html-only` | regenerate the viewer from an existing conversion, no re-read |
 | `--part-metrics` | add a per-part breakdown to the JSON manifest |
-| `--theme` | initial viewer theme (`dark` / `light`) |
+| `--theme` | initial viewer theme (`light` *(default)* / `dark`) |
 | `--units` | normalise to `MM` / `CM` / `M` / `INCH` |
 
 **Where the sample's colours come from.** `13110-PLI1.STEP` contains **zero**

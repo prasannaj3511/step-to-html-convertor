@@ -13,6 +13,8 @@
   --warn: #ffb454;
   --good: #5fd08a;
   --danger: #ff6b6b;
+  /* Portal brand blue - the one colour the dock shares with the GLB viewer. */
+  --brand: #1D99D6;
   --shadow: 0 6px 24px rgba(0, 0, 0, .45);
   --radius: 7px;
   --mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
@@ -216,7 +218,9 @@ button.tb:focus-visible, .tb:focus-visible { outline: 2px solid var(--accent); o
   color: var(--text-dim);
   text-shadow: 0 1px 3px rgba(0,0,0,.6);
 }
-#overlay-tl { top: 10px; left: 12px; }
+/* Clears the floating menu toggle (16px top + 40px button + 10px breathing room),
+   which now owns the top-left corner the HUD used to sit in. */
+#overlay-tl { top: 66px; left: 16px; }
 #overlay-bl { bottom: 10px; left: 12px; }
 #overlay-br { bottom: 10px; right: 12px; text-align: right; }
 [data-theme="light"] #overlay-tl,
@@ -248,94 +252,250 @@ button.tb:focus-visible, .tb:focus-visible { outline: 2px solid var(--accent); o
 [data-theme="light"] #viewcube button { background: rgba(255,255,255,.85); }
 #viewcube button:hover { color: var(--text); border-color: var(--accent); }
 
-#bottom-dock {
+/* ------------------------------------------------------------ bottom dock */
+
+/*
+ * The ECOM portal's GLB viewer toolbar, reproduced. Every number below is lifted
+ * from the portal's `modelMenuButtons` theme variant (ThemeContext.js) and the
+ * toolbar Box around it (ModelViewer.js), so a customer moving between a .glb
+ * machine and a converted .stp machine sees one product rather than two that
+ * happen to sit side by side.
+ *
+ * The row deliberately carries NO container surface at any width: the portal
+ * floats each button on the canvas with its own shadow, and the dock is white in
+ * both themes for the same reason - it is chrome over the model, not part of the
+ * page.
+ */
+
+#dock-stack {
   position: absolute;
   left: 50%;
-  bottom: 18px;
+  bottom: 25px;
   transform: translateX(-50%);
   z-index: 9;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  flex-wrap: nowrap;
-  gap: 6px;
-  padding: 0 12px;
-  max-width: calc(100% - 24px);
-  overflow-x: auto;
-  overflow-y: hidden;
+  gap: 8px;
+  /*
+   * `width: max-content` is load-bearing, not tidying. An absolutely positioned
+   * box with `left: 50%` and no `right` shrink-to-fits into the space RIGHT of
+   * that 50% - half the stage - so the toolbar folded itself into three rows
+   * long before it ran out of screen. Sizing to content and letting the
+   * translate do the centring gives the row the full width it actually has.
+   */
+  width: max-content;
+  max-width: 100%;
   pointer-events: auto;
+}
+
+/*
+ * Explode row. Floats ABOVE the toolbar in its own pill rather than docking into
+ * it, so enabling explode never shifts the toolbar's geometry. The 90%-white
+ * fill and a real shadow are both load-bearing: on a light canvas a translucent
+ * white pill with a white border has no visible surface at all.
+ */
+#explode-bar {
+  display: flex;
+  align-items: center;
+  column-gap: 16px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 6px 1px rgba(0, 0, 0, 0.1);
+  color: #1d2430;
+}
+#explode-bar.hidden { display: none; }
+
+.explode-label { min-width: 60px; font-size: 12px; line-height: 1.66; }
+
+#dock-explode {
+  width: 200px;
+  accent-color: var(--brand);
+  cursor: pointer;
+}
+
+#bottom-dock {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 20px;                 /* between groups; 8px lives on .dock-group */
+  max-width: 100%;
   scrollbar-width: none;
 }
 
 #bottom-dock::-webkit-scrollbar { display: none; }
 
+.dock-group { display: flex; align-items: center; gap: 8px; }
+
 .dock-btn,
 .dock-pill {
-  height: auto;
-  border: 1px solid rgba(209, 214, 221, 0.9);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.96);
-  color: #a6a8ad;
-  box-shadow: 0 10px 24px rgba(26, 32, 44, 0.12);
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 15px;
+  padding: 0;
+  background: #fff;
+  color: var(--brand);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1;
+  box-shadow: 0 0 6px 1px rgba(0, 0, 0, 0.1);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  backdrop-filter: blur(14px);
-  transition: transform .14s ease, box-shadow .14s ease, color .14s ease, background .14s ease;
+  transition: background .14s ease, color .14s ease, box-shadow .14s ease;
 }
 
-.dock-btn {
-  width: auto;
-  min-width: 0;
-  flex: 0 0 auto;
-  padding: 3px;
-}
-
+/*
+ * Labelled pills. The block above is built for 40px icon squares - it hard-sets
+ * padding 0 and a fixed width - so any labelled use has to restate its own
+ * horizontal padding, gap and auto width, or the text sits flush against both
+ * the pill edge and its own glyph. Height is deliberately NOT restated: the 40px
+ * is what keeps this row's baseline level with the round buttons either side.
+ */
 .dock-pill {
-  flex: 0 0 auto;
-  min-width: 0;
-  padding: 3px 10px;
-  font-size: 16px;
-  font-weight: 600;
-  letter-spacing: -.02em;
+  width: auto;
+  min-width: fit-content;
+  padding: 0 12px;
+  gap: 4px;
+  font-weight: 500;
   white-space: nowrap;
+  overflow: visible;
 }
 
 .dock-btn:hover,
 .dock-pill:hover {
-  transform: translateY(-1px);
-  color: #2f9adf;
-  box-shadow: 0 16px 34px rgba(26, 32, 44, 0.18);
+  background: var(--brand);
+  color: #fff;
+  box-shadow: 0 0 6px 1px rgba(0, 0, 0, 0.3);
 }
 
 .dock-btn.active,
 .dock-pill.active {
-  color: #2f9adf;
+  background: var(--brand);
+  color: #fff;
 }
 
-.dock-pill:not(.active) {
-  background: rgba(230, 230, 230, 0.96);
-  color: #a7a7a7;
+/*
+ * A disabled button still matches :hover, and the hover rule above carries equal
+ * specificity - without the :hover half here, the greyed Part / Isolate pills
+ * flip brand-blue under the cursor and read as clickable. This is reachable only
+ * because these buttons disable rather than disappear (so the row never reflows
+ * the moment a part is picked), which is exactly the portal's behaviour.
+ */
+.dock-btn:disabled,
+.dock-pill:disabled,
+.dock-btn:disabled:hover,
+.dock-pill:disabled:hover {
+  background: #e0e0e0;
+  color: #9e9e9e;
+  box-shadow: 0 0 6px 1px rgba(0, 0, 0, 0.1);
+  cursor: default;
 }
+
+.dock-btn:focus-visible,
+.dock-pill:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 
 .dock-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
   line-height: 1;
 }
 
-.dock-icon svg {
-  width: 22px;
-  height: 22px;
-  fill: currentColor;
+/* 24px is the MUI default the portal's icon-only buttons render at ... */
+.dock-icon svg { width: 24px; height: 24px; fill: currentColor; }
+/* ... while a glyph sharing a pill with a label is 14px there, not 24px. */
+.dock-pill .dock-icon svg { width: 14px; height: 14px; }
+
+/* ------------------------------------------------------ side-panel toggle */
+
+/* Reuses .dock-btn so the toggle is the same 40px chrome as the toolbar - the
+   portal builds it from the same button variant for exactly that reason. */
+#menu-toggle-wrap {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: auto;
 }
 
-#bottom-dock button .dock-icon:not(:first-of-type) {
-  display: none;
+.menu-toggle-tip {
+  padding: 5px 10px;
+  border-radius: 6px;
+  background: rgba(48, 54, 61, .92);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.3;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateX(-4px);
+  transition: opacity .12s ease, transform .12s ease;
+  pointer-events: none;
 }
+
+#menu-toggle-wrap:hover .menu-toggle-tip,
+#btn-menu-toggle:focus-visible + .menu-toggle-tip {
+  opacity: 1;
+  transform: none;
+}
+
+/* --------------------------------------------------------- dock more menu */
+
+#dock-more-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  min-width: 220px;
+  max-width: calc(100vw - 16px);
+  padding: 8px 0;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.14);
+  overflow: hidden;
+  z-index: 10;
+}
+
+#dock-more-menu.hidden { display: none; }
+
+.dock-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 8px 16px;
+  border: 0;
+  background: transparent;
+  color: #1d2430;
+  font-family: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dock-menu-item:hover { background: rgba(29, 153, 214, .08); }
+.dock-menu-item.active { color: var(--brand); }
+.dock-menu-item:disabled { color: #9e9e9e; cursor: default; }
+.dock-menu-item:disabled:hover { background: transparent; }
+
+.dock-menu-icon { display: inline-flex; width: 20px; }
+.dock-menu-icon svg { width: 20px; height: 20px; fill: currentColor; }
+
+/*
+ * Compact-only menu rows are hidden by default and revealed below the compact
+ * breakpoint, where their toolbar pills leave the row. Above it they would
+ * duplicate an action that is already one click away.
+ */
+.menu-compact-only { display: none; }
 
 /* ---------------------------------------------------------------- panels */
 
@@ -442,31 +602,29 @@ kbd {
   #sidebar { position: absolute; inset: 0 auto 0 0; z-index: 15; box-shadow: var(--shadow); }
   #topbar .brand small { display: none; }
   .tb-label { display: none; }
+}
+
+/*
+ * Compact breakpoint = MUI's `md`, which is where the portal's `isCompactToolbar`
+ * flips: the Home and selection groups, the Help button and the Machine label all
+ * drop out. Part and Isolate do NOT simply vanish - they surface in the More menu
+ * instead, so no action becomes unreachable on a phone.
+ */
+@media (max-width: 899px) {
+  .dock-md-only,
+  .dock-desktop-only { display: none !important; }
+  .menu-compact-only { display: flex; }
+  #dock-stack { bottom: 12px; }
+  #dock-explode { width: 120px; }
+  /*
+   * Wrap while there is room, scroll once there is not - the same trade the
+   * portal makes. A wrapped toolbar on a phone would eat the model; a scrolling
+   * one keeps the row one button tall however little width is left.
+   */
   #bottom-dock {
-    gap: 6px;
-    bottom: 10px;
-    padding: 0 6px;
-  }
-  .dock-btn {
-    width: auto;
-    min-width: 0;
-    height: auto;
-    padding: 3px;
-    border-radius: 14px;
-  }
-  .dock-pill {
-    min-width: 0;
-    height: auto;
-    padding: 3px 8px;
-    border-radius: 14px;
-    font-size: 14px;
-  }
-  .dock-icon {
-    width: 19px;
-    height: 19px;
-  }
-  .dock-icon svg {
-    width: 19px;
-    height: 19px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    max-width: 100%;
   }
 }

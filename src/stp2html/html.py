@@ -326,7 +326,7 @@ body.legacy-single-file #topbar .brand small {
   font-weight: 500;
 }
 
-body.legacy-single-file #btn-sidebar {
+body.legacy-single-file .tb#btn-sidebar {
   position: absolute;
   left: 6px;
   top: 16px;
@@ -341,13 +341,13 @@ body.legacy-single-file #btn-sidebar {
   font-size: 0;
 }
 
-body.legacy-single-file #btn-sidebar::before {
+body.legacy-single-file .tb#btn-sidebar::before {
   content: "\\2630";
   font-size: 22px;
   line-height: 50px;
 }
 
-body.legacy-single-file #btn-help {
+body.legacy-single-file .tb#btn-help {
   position: absolute;
   right: 0;
   top: 18px;
@@ -361,13 +361,13 @@ body.legacy-single-file #btn-help {
   box-shadow: none;
 }
 
-body.legacy-single-file #btn-help::before {
+body.legacy-single-file .tb#btn-help::before {
   content: "\\00d7";
   font-size: 34px;
   line-height: 44px;
 }
 
-body.legacy-single-file #btn-help:hover {
+body.legacy-single-file .tb#btn-help:hover {
   background: rgba(0, 0, 0, 0.04);
   color: var(--text);
 }
@@ -433,119 +433,127 @@ body.legacy-single-file .tb.active {
   color: #fff;
 }
 
-body.legacy-single-file #btn-fit::before { content: "\\2302"; }
-body.legacy-single-file #btn-home::before { content: "\\2302"; }
-body.legacy-single-file #btn-pan::before { content: "\\2725"; }
-body.legacy-single-file #btn-expand::before { content: "\\2197"; }
-body.legacy-single-file #btn-isolate::before { content: "\\29c9"; }
-body.legacy-single-file #btn-hide::before { content: "\\2297"; }
-body.legacy-single-file #btn-showall::before { content: "\\2637"; }
-body.legacy-single-file #btn-edges::before { content: "\\25a3"; }
-body.legacy-single-file #btn-section::before { content: "\\2014"; }
-body.legacy-single-file #btn-measure::before { content: "\\2194"; }
-body.legacy-single-file #btn-snap::before { content: "\\29c9"; }
-body.legacy-single-file #btn-info::before { content: "\\2611"; }
-body.legacy-single-file #btn-settings::before { content: "\\22ee"; }
-body.legacy-single-file #btn-theme-chip::before { content: "\\1f4a7"; }
-body.legacy-single-file #btn-part-chip::before { content: "\\1f4a7"; }
+/* Emoji glyphs for the legacy shell's top-bar buttons.
 
-body.legacy-single-file #btn-fit,
-body.legacy-single-file #btn-home,
-body.legacy-single-file #btn-pan,
-body.legacy-single-file #btn-expand,
-body.legacy-single-file #btn-isolate,
-body.legacy-single-file #btn-hide,
-body.legacy-single-file #btn-showall,
-body.legacy-single-file #btn-edges,
-body.legacy-single-file #btn-section,
-body.legacy-single-file #btn-measure,
-body.legacy-single-file #btn-snap,
-body.legacy-single-file #btn-info,
-body.legacy-single-file #btn-settings,
-body.legacy-single-file #btn-theme-chip,
-body.legacy-single-file #btn-part-chip {
+   Every selector below is scoped to `.tb` on purpose. These rules key on ids
+   alone, and several of those ids (#btn-home, #btn-theme-chip, #btn-part-chip,
+   #btn-isolate) now belong to the bottom dock, which draws real SVG icons. An
+   unscoped `#btn-home { font-size: 0 }` reaches straight into the dock and
+   silently blanks its labels, so the `.tb` keeps these aimed at the top bar and
+   nowhere else. */
+body.legacy-single-file .tb#btn-fit::before { content: "\\2302"; }
+body.legacy-single-file .tb#btn-home::before { content: "\\2302"; }
+body.legacy-single-file .tb#btn-pan::before { content: "\\2725"; }
+body.legacy-single-file .tb#btn-expand::before { content: "\\2197"; }
+body.legacy-single-file .tb#btn-isolate::before { content: "\\29c9"; }
+body.legacy-single-file .tb#btn-hide::before { content: "\\2297"; }
+body.legacy-single-file .tb#btn-showall::before { content: "\\2637"; }
+body.legacy-single-file .tb#btn-edges::before { content: "\\25a3"; }
+body.legacy-single-file .tb#btn-section::before { content: "\\2014"; }
+body.legacy-single-file .tb#btn-measure::before { content: "\\2194"; }
+body.legacy-single-file .tb#btn-snap::before { content: "\\29c9"; }
+body.legacy-single-file .tb#btn-info::before { content: "\\2611"; }
+body.legacy-single-file .tb#btn-settings::before { content: "\\22ee"; }
+body.legacy-single-file .tb#btn-theme-chip::before { content: "\\1f4a7"; }
+body.legacy-single-file .tb#btn-part-chip::before { content: "\\1f4a7"; }
+
+body.legacy-single-file .tb#btn-fit,
+body.legacy-single-file .tb#btn-home,
+body.legacy-single-file .tb#btn-pan,
+body.legacy-single-file .tb#btn-expand,
+body.legacy-single-file .tb#btn-isolate,
+body.legacy-single-file .tb#btn-hide,
+body.legacy-single-file .tb#btn-showall,
+body.legacy-single-file .tb#btn-edges,
+body.legacy-single-file .tb#btn-section,
+body.legacy-single-file .tb#btn-measure,
+body.legacy-single-file .tb#btn-snap,
+body.legacy-single-file .tb#btn-info,
+body.legacy-single-file .tb#btn-settings,
+body.legacy-single-file .tb#btn-theme-chip,
+body.legacy-single-file .tb#btn-part-chip {
   font-size: 0;
 }
 
-body.legacy-single-file #btn-fit::before,
-body.legacy-single-file #btn-home::before,
-body.legacy-single-file #btn-pan::before,
-body.legacy-single-file #btn-expand::before,
-body.legacy-single-file #btn-isolate::before,
-body.legacy-single-file #btn-hide::before,
-body.legacy-single-file #btn-showall::before,
-body.legacy-single-file #btn-edges::before,
-body.legacy-single-file #btn-section::before,
-body.legacy-single-file #btn-measure::before,
-body.legacy-single-file #btn-snap::before,
-body.legacy-single-file #btn-info::before,
-body.legacy-single-file #btn-settings::before,
-body.legacy-single-file #btn-theme-chip::before,
-body.legacy-single-file #btn-part-chip::before {
+body.legacy-single-file .tb#btn-fit::before,
+body.legacy-single-file .tb#btn-home::before,
+body.legacy-single-file .tb#btn-pan::before,
+body.legacy-single-file .tb#btn-expand::before,
+body.legacy-single-file .tb#btn-isolate::before,
+body.legacy-single-file .tb#btn-hide::before,
+body.legacy-single-file .tb#btn-showall::before,
+body.legacy-single-file .tb#btn-edges::before,
+body.legacy-single-file .tb#btn-section::before,
+body.legacy-single-file .tb#btn-measure::before,
+body.legacy-single-file .tb#btn-snap::before,
+body.legacy-single-file .tb#btn-info::before,
+body.legacy-single-file .tb#btn-settings::before,
+body.legacy-single-file .tb#btn-theme-chip::before,
+body.legacy-single-file .tb#btn-part-chip::before {
   font-size: 22px;
   line-height: 1;
 }
 
-body.legacy-single-file #btn-home,
-body.legacy-single-file #btn-pan,
-body.legacy-single-file #btn-expand,
-body.legacy-single-file #btn-theme-chip,
-body.legacy-single-file #btn-part-chip,
-body.legacy-single-file #btn-isolate,
-body.legacy-single-file #btn-section,
-body.legacy-single-file #btn-measure {
+body.legacy-single-file .tb#btn-home,
+body.legacy-single-file .tb#btn-pan,
+body.legacy-single-file .tb#btn-expand,
+body.legacy-single-file .tb#btn-theme-chip,
+body.legacy-single-file .tb#btn-part-chip,
+body.legacy-single-file .tb#btn-isolate,
+body.legacy-single-file .tb#btn-section,
+body.legacy-single-file .tb#btn-measure {
   font-size: 15px;
 }
 
-body.legacy-single-file #btn-home::before,
-body.legacy-single-file #btn-pan::before,
-body.legacy-single-file #btn-expand::before,
-body.legacy-single-file #btn-theme-chip::before,
-body.legacy-single-file #btn-part-chip::before,
-body.legacy-single-file #btn-section::before,
-body.legacy-single-file #btn-measure::before {
+body.legacy-single-file .tb#btn-home::before,
+body.legacy-single-file .tb#btn-pan::before,
+body.legacy-single-file .tb#btn-expand::before,
+body.legacy-single-file .tb#btn-theme-chip::before,
+body.legacy-single-file .tb#btn-part-chip::before,
+body.legacy-single-file .tb#btn-section::before,
+body.legacy-single-file .tb#btn-measure::before {
   margin-right: 8px;
   vertical-align: middle;
 }
 
-body.legacy-single-file #btn-home,
-body.legacy-single-file #btn-pan,
-body.legacy-single-file #btn-expand,
-body.legacy-single-file #btn-theme-chip,
-body.legacy-single-file #btn-part-chip,
-body.legacy-single-file #btn-isolate,
-body.legacy-single-file #btn-section,
-body.legacy-single-file #btn-measure {
+body.legacy-single-file .tb#btn-home,
+body.legacy-single-file .tb#btn-pan,
+body.legacy-single-file .tb#btn-expand,
+body.legacy-single-file .tb#btn-theme-chip,
+body.legacy-single-file .tb#btn-part-chip,
+body.legacy-single-file .tb#btn-isolate,
+body.legacy-single-file .tb#btn-section,
+body.legacy-single-file .tb#btn-measure {
   min-width: 118px;
 }
 
-body.legacy-single-file #btn-theme-chip {
+body.legacy-single-file .tb#btn-theme-chip {
   color: var(--accent);
 }
 
-body.legacy-single-file #btn-part-chip,
-body.legacy-single-file #btn-isolate {
+body.legacy-single-file .tb#btn-part-chip,
+body.legacy-single-file .tb#btn-isolate {
   background: #e4e4e4;
   border-color: #dddddd;
   color: #8e8e8e;
   box-shadow: none;
 }
 
-body.legacy-single-file #btn-fit,
-body.legacy-single-file #btn-info,
-body.legacy-single-file #btn-help,
-body.legacy-single-file #btn-settings,
-body.legacy-single-file #btn-sidebar,
-body.legacy-single-file #btn-snap,
-body.legacy-single-file #btn-edges,
-body.legacy-single-file #btn-hide,
-body.legacy-single-file #btn-showall {
+body.legacy-single-file .tb#btn-fit,
+body.legacy-single-file .tb#btn-info,
+body.legacy-single-file .tb#btn-help,
+body.legacy-single-file .tb#btn-settings,
+body.legacy-single-file .tb#btn-sidebar,
+body.legacy-single-file .tb#btn-snap,
+body.legacy-single-file .tb#btn-edges,
+body.legacy-single-file .tb#btn-hide,
+body.legacy-single-file .tb#btn-showall {
   min-width: 56px;
 }
 
-body.legacy-single-file #btn-help,
-body.legacy-single-file #btn-settings,
-body.legacy-single-file #btn-sidebar {
+body.legacy-single-file .tb#btn-help,
+body.legacy-single-file .tb#btn-settings,
+body.legacy-single-file .tb#btn-sidebar {
   width: 56px;
   height: 56px;
   padding: 0;
@@ -556,9 +564,9 @@ body.legacy-single-file #btn-sidebar {
   border: 1px solid rgba(224, 224, 219, 0.95);
 }
 
-body.legacy-single-file #btn-info,
-body.legacy-single-file #btn-help,
-body.legacy-single-file #btn-settings {
+body.legacy-single-file .tb#btn-info,
+body.legacy-single-file .tb#btn-help,
+body.legacy-single-file .tb#btn-settings {
   position: static;
   min-width: 56px;
   width: 56px;
@@ -567,34 +575,34 @@ body.legacy-single-file #btn-settings {
   font-size: 0;
 }
 
-body.legacy-single-file #btn-info::before,
-body.legacy-single-file #btn-help::before,
-body.legacy-single-file #btn-settings::before {
+body.legacy-single-file .tb#btn-info::before,
+body.legacy-single-file .tb#btn-help::before,
+body.legacy-single-file .tb#btn-settings::before {
   display: block;
   text-align: center;
   line-height: 56px;
 }
 
-body.legacy-single-file #btn-help::before {
+body.legacy-single-file .tb#btn-help::before {
   content: "?";
   font-size: 24px;
   line-height: 1;
 }
 
-body.legacy-single-file #btn-sidebar {
+body.legacy-single-file .tb#btn-sidebar {
   position: fixed;
   left: 18px;
   top: 18px;
   z-index: 16;
 }
 
-body.legacy-single-file #btn-sidebar::before {
+body.legacy-single-file .tb#btn-sidebar::before {
   content: "\\2630";
   font-size: 24px;
   line-height: 1;
 }
 
-body.legacy-single-file #btn-settings::before {
+body.legacy-single-file .tb#btn-settings::before {
   font-size: 28px;
 }
 
@@ -942,7 +950,7 @@ def build_page(
     js: str,
     template: str,
     out_dir: Path,
-    theme: str = "dark",
+    theme: str = "light",
     models: list[dict] | None = None,
     model_index: int = 0,
 ) -> str:
@@ -1133,7 +1141,7 @@ def write_viewer(
     *,
     title: str | None = None,
     single_file: bool = False,
-    theme: str = "dark",
+    theme: str = "light",
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     template_path = SINGLE_FILE_TEMPLATE if single_file else DEFAULT_TEMPLATE

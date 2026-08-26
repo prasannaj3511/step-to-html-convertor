@@ -55,7 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--html-only", action="store_true",
                    help="regenerate the viewer from models already in the output "
                         "directory, without re-reading any STEP file")
-    g.add_argument("--theme", default="dark", choices=["dark", "light"],
+    g.add_argument("--theme", default="light", choices=["dark", "light"],
                    help="initial viewer theme")
     g.add_argument("--part-metrics", action="store_true",
                    help="include a per-part breakdown in the JSON manifest")

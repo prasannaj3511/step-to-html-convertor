@@ -25,8 +25,6 @@ const CFG = window.__ISTP2HTML__ || {};
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 const stageEl = $('#stage') || $('#viewer');
-const QUOTE_STORAGE_KEY = 'istp2html.quote.items';
-const QUOTE_META_KEY = 'istp2html.quote.meta';
 
 /* ------------------------------------------------------------------ state */
 
@@ -56,10 +54,28 @@ const state = {
   lastCalls: 0,
   lastTris: 0,
   renderCount: 0,
-  shading: CFG.shading || 'shaded',
+  shading: CFG.shading === 'shaded-wire' ? 'shaded' : (CFG.shading || 'shaded'),
+  shadedWire: CFG.shading === 'shaded-wire',
+  machineTransparent: false,
+  // --- bottom dock, mirroring the portal's GLB viewer toolbar ---
+  navMode: 'rotate',        // gesture the LEFT mouse button performs
+  // Per-part transparency accumulates: making one part see-through leaves the
+  // previous ones see-through, so several can be compared at once.
+  transparentParts: new Set(),
+  explodeEnabled: false,    // the dock toggle; the amount below survives turning it off
+  explodeValue: 0.5,
+  selectVisibleActive: false,
+  visibleSelection: [],     // parts highlighted by "Select Visible", kept apart from
+                            // `selected` so isolate/part-transparency still mean one part
+  zoomedToSelection: false,
+  sidebarOpen: true,
+  // Isolate is a MODE, not a one-shot: it follows the selection, and the backup
+  // is what "everything was visible like this before isolating" looked like, so
+  // leaving isolate does not silently un-hide parts the user hid by hand.
+  isolateBackup: null,
   tone: CFG.tone || 'neutral',
   modelIndex: CFG.modelIndex || 0,
-  quote: { items: new Map(), open: false },
+  homeView: null,
 };
 
 /* --------------------------------------------------------------- renderer */
@@ -290,9 +306,19 @@ function disposeModel() {
   state.edgesBuilt = false;
   state.edgeGroup = null;
   state.explode = 0;
+  state.machineTransparent = false;
   state.frameTimes = [];
+  // Everything below describes the model being torn down, so it cannot survive
+  // into the next one. Part transparency lives on the shared HIGHLIGHT material
+  // rather than on a mesh, so it needs clearing explicitly or it leaks across
+  // model switches.
+  state.transparentParts.clear();
+  state.zoomedToSelection = false;
+  state.selectVisibleActive = false;
+  state.visibleSelection = [];
+  state.isolateBackup = null;
   $('#btn-edges')?.classList.remove('active');
-  $('#btn-isolate')?.classList.remove('active');
+  syncDockState();
 }
 
 async function switchModel(index) {
@@ -328,6 +354,8 @@ async function switchModel(index) {
     await loadModel(entry.model);
     // Shading is a viewer preference, so carry it across the switch.
     if (state.shading === 'flat') setShading('flat');
+    if (state.shadedWire) await setShadedWire(true);
+    if (state.machineTransparent) applyMachineTransparency(true);
     toast(`Loaded ${entry.title || entry.name}`);
   } catch (err) {
     failLoad(err);
@@ -384,8 +412,32 @@ function setShading(mode) {
   renderer.toneMapping = mode === 'flat'
     ? THREE.NoToneMapping
     : (TONE_MAPPINGS[state.tone] ?? THREE.NeutralToneMapping);
+  if (state.machineTransparent) applyMachineTransparency(true);
   forEachMaterial((m) => { m.needsUpdate = true; });
   updateSelectionUI();
+  requestRender();
+}
+
+function syncShadedWireUI() {
+  const opt = $('#opt-shaded-wire');
+  if (opt) opt.checked = !!state.shadedWire;
+}
+
+async function setShadedWire(enabled) {
+  if (enabled && state.shading !== 'shaded') {
+    const shadingSelect = $('#opt-shading');
+    if (shadingSelect) shadingSelect.value = 'shaded';
+    setShading('shaded');
+  }
+  state.shadedWire = enabled;
+  if (enabled) {
+    if (!state.edgesBuilt) await buildEdges();
+    if (state.edgeGroup) state.edgeGroup.visible = true;
+  } else if (state.edgeGroup) {
+    state.edgeGroup.visible = false;
+  }
+  $('#btn-edges')?.classList.toggle('active', !!state.edgeGroup?.visible);
+  syncShadedWireUI();
   requestRender();
 }
 
@@ -396,6 +448,109 @@ function setToneMapping(name) {
     forEachMaterial((m) => { m.needsUpdate = true; });
   }
   requestRender();
+}
+
+function applyMachineTransparency(enabled) {
+  if (!state.root) return;
+  clearSelection();
+  state.root.traverse((o) => {
+    if (!o.isMesh) return;
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    for (const m of mats) {
+      if (!m) continue;
+      if (!m.userData._machineSurface) {
+        m.userData._machineSurface = {
+          transparent: !!m.transparent,
+          opacity: typeof m.opacity === 'number' ? m.opacity : 1,
+          depthWrite: 'depthWrite' in m ? !!m.depthWrite : true,
+        };
+      }
+      const base = m.userData._machineSurface;
+      m.transparent = enabled ? true : base.transparent;
+      m.opacity = enabled ? 0.2 : base.opacity;
+      if ('depthWrite' in m) m.depthWrite = enabled ? false : base.depthWrite;
+      m.needsUpdate = true;
+    }
+  });
+  state.machineTransparent = enabled;
+  syncDockState();
+  updateSelectionUI();
+  requestRender();
+}
+
+function toggleMachineTransparency() {
+  applyMachineTransparency(!state.machineTransparent);
+  toast(state.machineTransparent ? 'Machine transparent' : 'Machine view restored');
+}
+
+/*
+ * Per-part transparency.
+ *
+ * The materials that arrive from glTF are shared between parts, so flipping the
+ * flags in place would turn every part that happens to use the same material
+ * see-through at once. Each material therefore gets ONE transparent twin, cached
+ * on the original and reused, and a part is made transparent by swapping which
+ * of the pair its meshes wear. That is what lets several parts be transparent
+ * simultaneously without any of them interfering.
+ */
+function solidOf(mat) {
+  return (mat && mat.userData && mat.userData._solidSource) || mat;
+}
+
+function transparentVariant(mat) {
+  if (!mat) return mat;
+  const solid = solidOf(mat);
+  if (solid.userData._transparentTwin) return solid.userData._transparentTwin;
+  const twin = solid.clone();
+  twin.transparent = true;
+  twin.opacity = PART_TRANSPARENT_OPACITY;
+  twin.depthWrite = false;
+  twin.userData = { ...twin.userData, _solidSource: solid };
+  solid.userData._transparentTwin = twin;
+  return twin;
+}
+
+function isPartTransparent(part) {
+  return !!part && state.transparentParts.has(part);
+}
+
+function setPartTransparency(part, enabled) {
+  if (!part) return;
+  if (enabled) state.transparentParts.add(part);
+  else state.transparentParts.delete(part);
+
+  const selected = state.selected === part;
+  for (const m of part.meshes) {
+    if (selected) {
+      // Wearing a highlight: swap which highlight, and rewrite the stash so the
+      // choice survives being deselected later.
+      m.material = enabled ? HIGHLIGHT_TRANSPARENT : HIGHLIGHT;
+      if (m.userData._mat) {
+        m.userData._mat = enabled ? transparentVariant(m.userData._mat) : solidOf(m.userData._mat);
+      }
+    } else {
+      m.material = enabled ? transparentVariant(m.material) : solidOf(m.material);
+    }
+  }
+  syncDockState();
+  requestRender();
+}
+
+function togglePartTransparency() {
+  const part = state.selected;
+  if (!part) { toast('Select a part first'); return; }
+  const next = !isPartTransparent(part);
+  setPartTransparency(part, next);
+  const total = state.transparentParts.size;
+  toast(next
+    ? `${part.name} transparent (${total} part${total === 1 ? '' : 's'})`
+    : `${part.name} solid`);
+}
+
+/** Used when a model is torn down, and by "Show all" as a full reset. */
+function clearAllPartTransparency() {
+  for (const part of [...state.transparentParts]) setPartTransparency(part, false);
+  state.transparentParts.clear();
 }
 
 /**
@@ -549,6 +704,11 @@ function frameBounds() {
   scene.add(keyLight.target, fillLight.target, rimLight.target);
 
   setView('iso', false);
+  state.homeView = {
+    position: camera.position.clone(),
+    target: controls.target.clone(),
+    up: camera.up.clone(),
+  };
 }
 
 function buildGrid() {
@@ -661,6 +821,60 @@ function moveCamera(pos, target, animate = true) {
   requestRender();
 }
 
+function goHome(animate = true) {
+  if (!state.homeView) {
+    fitTo(state.bounds, animate);
+    return;
+  }
+  camera.up.copy(state.homeView.up);
+  moveCamera(state.homeView.position, state.homeView.target, animate);
+}
+
+/**
+ * Home is a full reset, not just a camera move.
+ *
+ * The portal's home button puts the machine back the way it arrived: every
+ * filter released - machine and per-part transparency, isolate, explode,
+ * section, hidden parts, the tree search - and only then the camera flown back
+ * to its opening view. Leaving a filter on while the camera resets is what makes
+ * the button feel broken: you press "reset" and the machine is still see-through.
+ *
+ * Rendering PREFERENCES are deliberately left alone - shading mode, theme, grid,
+ * edges, tone, FOV. Those are settings the user went into a panel and chose, not
+ * state they fell into by clicking around the model.
+ *
+ * Part transparency is cleared before machine transparency on purpose: a
+ * transparent part wears a swapped-in material twin, and the machine restore
+ * pass only touches the materials meshes are actually wearing at the time.
+ */
+function resetView(animate = true) {
+  if (!state.root) { goHome(animate); return; }
+
+  if (state.measure.active) toggleMeasure();
+  else clearMeasure();
+
+  const search = $('#tree-search');
+  if (search) search.value = '';
+
+  if (state.explodeEnabled) setExplodeEnabled(false);
+
+  if (state.clip.enabled) {
+    state.clip.enabled = false;
+    const clipOn = $('#clip-on');
+    if (clipOn) clipOn.checked = false;
+    updateClipping();
+  }
+
+  clearSelection();
+  markSelectedRow(null);
+  showAll();                     // select-visible, isolate, part transparency, hidden parts
+  if (state.machineTransparent) applyMachineTransparency(false);
+
+  updateSelectionUI();
+  goHome(animate);
+  toast('View reset');
+}
+
 function stepCameraAnim(now) {
   if (!camAnim) return false;
   const k = Math.min(1, (now - camAnim.t0) / camAnim.dur);
@@ -673,6 +887,8 @@ function stepCameraAnim(now) {
 
 /* --------------------------------------------------------------- selection */
 
+const PART_TRANSPARENT_OPACITY = 0.35;
+
 const HIGHLIGHT = new THREE.MeshStandardMaterial({
   color: 0x4da3ff,
   emissive: 0x11406e,
@@ -681,158 +897,36 @@ const HIGHLIGHT = new THREE.MeshStandardMaterial({
   side: THREE.FrontSide,
 });
 
-function quoteDisplayName(part) {
-  return (part && part.name ? String(part.name) : 'Selected Part').trim() || 'Selected Part';
-}
+// A selected part wears HIGHLIGHT, so a selected part that is ALSO transparent
+// needs a second highlight rather than mutated flags on the shared one - several
+// parts can be transparent at once now, and only one of them is selected.
+const HIGHLIGHT_TRANSPARENT = HIGHLIGHT.clone();
+HIGHLIGHT_TRANSPARENT.transparent = true;
+HIGHLIGHT_TRANSPARENT.opacity = PART_TRANSPARENT_OPACITY;
+HIGHLIGHT_TRANSPARENT.depthWrite = false;
 
-function quoteSku(part) {
-  const name = quoteDisplayName(part);
-  const m = name.match(/\b\d[\d_-]*\b/);
-  return m ? m[0] : name;
-}
-
-function quoteAppUrl() {
-  const params = new URLSearchParams(window.location.search);
-  return (
-    params.get('quoteApp') ||
-    params.get('quoteUrl') ||
-    CFG.quoteAppUrl ||
-    '/application'
-  );
-}
-
-function quoteEntries() {
-  return Array.from(state.quote.items.values());
-}
-
-function persistQuoteState() {
-  const items = quoteEntries();
-  try {
-    localStorage.setItem(QUOTE_STORAGE_KEY, JSON.stringify(items));
-    localStorage.setItem(QUOTE_META_KEY, JSON.stringify({
-      model: CFG.title || '',
-      updatedAt: new Date().toISOString(),
-    }));
-  } catch {}
-}
-
-function hydrateQuoteState() {
-  try {
-    const raw = localStorage.getItem(QUOTE_STORAGE_KEY);
-    if (!raw) return;
-    const items = JSON.parse(raw);
-    if (!Array.isArray(items)) return;
-    for (const item of items) {
-      if (!item || !item.sku) continue;
-      state.quote.items.set(item.sku, {
-        sku: String(item.sku),
-        name: String(item.name || item.sku),
-        qty: Math.max(1, parseInt(item.qty, 10) || 1),
-      });
-    }
-  } catch {}
-}
-
-function updateCartCount() {
-  const countEl = $('.legacy-cart-count');
-  if (!countEl) return;
-  const total = quoteEntries().reduce((sum, item) => sum + item.qty, 0);
-  countEl.textContent = String(total);
-}
-
-function renderQuoteDrawer() {
-  const list = $('#quote-drawer-list');
-  if (!list) return;
-  const items = quoteEntries();
-  if (!items.length) {
-    list.innerHTML = '<div class="quote-empty">No quote items yet.</div>';
-    return;
-  }
-  list.innerHTML = items.map((item) =>
-    `<div class="quote-row">` +
-    `<div><div class="quote-row-title">${escapeHtml(item.name)}</div><div class="quote-row-sku">${escapeHtml(item.sku)}</div></div>` +
-    `<div class="quote-row-qty">x${item.qty}</div>` +
-    `<button class="quote-row-remove" type="button" data-sku="${escapeHtml(item.sku)}" aria-label="Remove item">&times;</button>` +
-    `</div>`
-  ).join('');
-  $$('.quote-row-remove').forEach((btn) => {
-    btn.addEventListener('click', () => removeQuoteItem(btn.dataset.sku));
-  });
-}
-
-function setQuoteDrawer(open) {
-  state.quote.open = open;
-  const drawer = $('#quote-drawer');
-  if (drawer) drawer.classList.toggle('hidden', !open);
-}
-
-function showQuotePopover(part) {
-  const pop = $('#quote-popover');
-  const title = $('#quote-popover-title');
-  const sku = $('#quote-popover-sku');
-  if (!pop || !title || !sku || !part) return;
-  title.textContent = quoteDisplayName(part);
-  sku.textContent = quoteSku(part);
-  pop.classList.remove('hidden');
-}
-
-function hideQuotePopover() {
-  $('#quote-popover')?.classList.add('hidden');
-}
-
-function addPartToQuote(part) {
-  if (!part) { toast('Select a part first'); return; }
-  const sku = quoteSku(part);
-  const existing = state.quote.items.get(sku);
-  if (existing) existing.qty += 1;
-  else {
-    state.quote.items.set(sku, {
-      sku,
-      name: quoteDisplayName(part),
-      qty: 1,
-    });
-  }
-  persistQuoteState();
-  updateCartCount();
-  renderQuoteDrawer();
-  setQuoteDrawer(true);
-  toast(`Added ${quoteDisplayName(part)} to quote`);
-}
-
-function removeQuoteItem(sku) {
-  if (!sku) return;
-  state.quote.items.delete(sku);
-  persistQuoteState();
-  updateCartCount();
-  renderQuoteDrawer();
-}
-
-function submitQuoteItems() {
-  const items = quoteEntries();
-  if (!items.length) {
-    toast('Add at least one part to quote');
-    return;
-  }
-  persistQuoteState();
-  window.location.href = quoteAppUrl();
+function highlightFor(part) {
+  return state.transparentParts.has(part) ? HIGHLIGHT_TRANSPARENT : HIGHLIGHT;
 }
 
 function selectPart(part, { focus = false, fromTree = false } = {}) {
   if (state.selected === part) {
     if (focus) fitTo(new THREE.Box3().setFromObject(part.object));
-    if (part) showQuotePopover(part);
     return;
   }
+  // A sweep-highlight and a single selection both stash the original material on
+  // the same key, and both mark tree rows `selected`. Picking a part ends the
+  // sweep so neither can strip the other's state out from under it.
+  if (state.selectVisibleActive) setSelectVisible(false);
   clearSelection();
   state.selected = part;
   if (part) {
     for (const m of part.meshes) {
       m.userData._mat = m.material;
-      m.material = HIGHLIGHT;
+      m.material = highlightFor(part);
     }
     if (focus) fitTo(new THREE.Box3().setFromObject(part.object));
     if (!fromTree) revealInTree(part);
-    showQuotePopover(part);
   }
   updateSelectionUI();
   requestRender();
@@ -846,7 +940,11 @@ function clearSelection() {
     }
   }
   state.selected = null;
-  hideQuotePopover();
+  // Zoom-to-selection describes a camera state tied to a part that is no longer
+  // selected. Transparency deliberately does NOT reset here: it belongs to the
+  // part, not to the act of having it selected, which is what lets several parts
+  // stay transparent while you move between them.
+  state.zoomedToSelection = false;
 }
 
 const raycaster = new THREE.Raycaster();
@@ -1038,6 +1136,7 @@ function setObjectVisible(obj, visible) {
 /* ------------------------------------------------------------------ filter */
 
 function applyFilter(query) {
+  if (state.selectVisibleActive) setSelectVisible(false);   // filtering rewrites visibility
   const q = query.trim().toLowerCase();
   if (!q) {
     for (const p of state.parts) setObjectVisible(p.object, true);
@@ -1066,29 +1165,72 @@ function applyFilter(query) {
 /* -------------------------------------------------------------- visibility */
 
 function showAll() {
+  // The sweep highlights "the parts visible right now", so any change to what is
+  // visible invalidates it.
+  if (state.selectVisibleActive) setSelectVisible(false);
+  state.isolated = false;
+  state.isolateBackup = null;
+  clearAllPartTransparency();
   state.root.traverse((o) => { if (o !== grid) o.visible = true; });
   for (const p of state.parts) p.visible = true;
-  state.isolated = false;
   $$('.trow').forEach((r) => r.classList.remove('dimmed'));
   $$('.teye').forEach((e) => { e.textContent = '◉'; });
-  $('#btn-isolate')?.classList.remove('active');
+  syncDockState();
+  requestRender();
+}
+
+/**
+ * Isolate is a MODE that follows the selection, not a one-shot hide.
+ *
+ * While it is on, whatever is selected is what you see; pick a different part and
+ * isolation moves to it. Losing the selection ends the mode outright: clicking
+ * empty space brings the machine back AND releases the button, so the next part
+ * you pick is simply selected instead of being silently re-isolated. That is the
+ * portal's behaviour, and it is why clicking empty space no longer strands you
+ * inside a lone part with no way out but re-selecting it.
+ *
+ * The backup is what makes leaving isolate safe: restoring means "put visibility
+ * back how it was", not "show everything", so parts hidden by hand before
+ * isolating stay hidden afterwards.
+ */
+function applyIsolateState() {
+  if (!state.root) return;
+  const wanted = state.isolated && !!state.selected;
+  // Deselecting is what turns the mode off - not just what suspends its effect.
+  if (state.isolated && !state.selected) state.isolated = false;
+
+  if (wanted) {
+    if (!state.isolateBackup) {
+      state.isolateBackup = new Map();
+      state.root.traverse((o) => state.isolateBackup.set(o, o.visible));
+    }
+    const keep = new Set();
+    let cur = state.selected.object;
+    while (cur) { keep.add(cur); cur = cur.parent; }
+    state.selected.object.traverse((o) => keep.add(o));
+    state.root.traverse((o) => { o.visible = keep.has(o); });
+    state.root.visible = true;
+  } else if (state.isolateBackup) {
+    state.root.traverse((o) => {
+      if (state.isolateBackup.has(o)) o.visible = state.isolateBackup.get(o);
+    });
+    state.isolateBackup = null;
+  }
   requestRender();
 }
 
 function isolateSelected() {
+  // Matches the portal, where the button is simply disabled without a selection.
   if (!state.selected) { toast('Select a part first'); return; }
-  if (state.isolated) { showAll(); toast('Isolation off'); return; }
-  const keep = new Set();
-  let cur = state.selected.object;
-  while (cur) { keep.add(cur); cur = cur.parent; }
-  state.selected.object.traverse((o) => keep.add(o));
-  state.root.traverse((o) => { if (o.isMesh || o.isGroup || o.isObject3D) o.visible = keep.has(o); });
-  state.root.visible = true;
-  state.isolated = true;
-  $('#btn-isolate')?.classList.add('active');
-  fitTo(new THREE.Box3().setFromObject(state.selected.object));
-  requestRender();
-  toast('Isolated ' + state.selected.name);
+  state.isolated = !state.isolated;
+  applyIsolateState();
+  syncDockState();
+  if (state.isolated) {
+    fitTo(new THREE.Box3().setFromObject(state.selected.object));
+    toast('Isolated ' + state.selected.name);
+  } else {
+    toast('Isolation off');
+  }
 }
 
 function hideSelected() {
@@ -1234,6 +1376,8 @@ async function buildEdges(thresholdDeg = 28) {
   if (state.edgesBuilt) {
     state.edgeGroup.visible = !state.edgeGroup.visible;
     $('#btn-edges')?.classList.toggle('active', state.edgeGroup.visible);
+    state.shadedWire = !!state.edgeGroup.visible;
+    syncShadedWireUI();
     requestRender();
     return;
   }
@@ -1300,7 +1444,10 @@ async function buildEdges(thresholdDeg = 28) {
   scene.add(group);
   state.edgeGroup = group;
   state.edgesBuilt = true;
+  state.edgeGroup.visible = true;
   $('#btn-edges')?.classList.add('active');
+  state.shadedWire = true;
+  syncShadedWireUI();
   requestRender();
   toast(`Edges built in ${((performance.now() - t0) / 1000).toFixed(1)}s`);
 }
@@ -1327,6 +1474,12 @@ function updateHud() {
 
 function updateSelectionUI() {
   const p = state.selected;
+  // Every path that changes what is selected ends up here, which makes it the
+  // one place the dock's selection-gated buttons need re-rendering from - and the
+  // one place isolate needs to follow the selection to its new target, or release
+  // when there is no longer one.
+  applyIsolateState();
+  syncDockState();
   const el = $('#sel-info');
   if (!p) {
     el.innerHTML = '<span style="color:var(--text-faint)">No selection &mdash; click a part</span>';
@@ -1524,10 +1677,16 @@ function togglePanel(sel) {
   return wasHidden;
 }
 
-function toggleSidebar() {
-  $('#sidebar').classList.toggle('collapsed');
+function setSidebarOpen(open) {
+  state.sidebarOpen = !!open;
+  $('#sidebar').classList.toggle('collapsed', !state.sidebarOpen);
+  syncDockState();
+  // The panel slides over 180ms and the canvas has to re-measure once it lands;
+  // resizing mid-transition just gives the renderer a size it never keeps.
   setTimeout(resizeForce, 200);
 }
+
+function toggleSidebar() { setSidebarOpen(!state.sidebarOpen); }
 
 function toggleMeasure() {
   const btnMeasure = $('#btn-measure');
@@ -1559,27 +1718,322 @@ function buildModelSwitcher() {
   sel.addEventListener('change', (e) => switchModel(parseInt(e.target.value, 10)));
 }
 
+/* ------------------------------------------------------------- bottom dock */
+
+/*
+ * The actions behind the GLB-parity toolbar, plus the one rule that holds this
+ * section together: `syncDockState()` is the ONLY thing that writes a dock
+ * button's glyph, label, tooltip, `active` class or `disabled` flag. The portal's
+ * other HTML viewer learned this the hard way - a dozen scattered innerHTML
+ * writes across one file kept desynchronising the same three toggles - so every
+ * handler here mutates `state` and then calls the single renderer.
+ */
+
+/* Glyphs that swap at runtime. The static ones live in the template; these are
+   the ones a toggle flips, so they have to exist as strings on this side.
+   Sources are @mui/icons-material (24px viewBox) and react-icons, matching the
+   portal's own imports. */
+const ICONS = {
+  navToPan: '<svg viewBox="0 0 24 24"><path d="M10 9h4V6h3l-5-5-5 5h3zm-1 1H6V7l-5 5 5 5v-3h3zm14 2-5-5v3h-3v4h3v3zm-9 3h-4v3H7l5 5 5-5h-3z"/></svg>',
+  navToRotate: '<svg viewBox="0 0 24 24"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8m0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4z"/></svg>',
+  dropSolid: '<svg viewBox="0 0 256 256"><path d="M174,47.75a254.19,254.19,0,0,0-41.45-38.3,8,8,0,0,0-9.18,0A254.19,254.19,0,0,0,82,47.75C54.51,79.32,40,112.6,40,144a88,88,0,0,0,176,0C216,112.6,201.49,79.32,174,47.75Z"/></svg>',
+  // @mui/icons-material Menu / MenuOpen - the portal's own drawer-toggle glyphs.
+  menuClosed: '<svg viewBox="0 0 24 24"><path d="M3 18h18v-2H3zm0-5h18v-2H3zm0-7v2h18V6z"/></svg>',
+  menuOpen: '<svg viewBox="0 0 24 24"><path d="M3 18h13v-2H3zm0-5h10v-2H3zm0-7v2h13V6zm18 9.59L17.42 12 21 8.41 19.59 7l-5 5 5 5z"/></svg>',
+  dropTransparent: '<svg viewBox="0 0 16 16"><path d="M0 6.5a6.5 6.5 0 0 1 12.346-2.846 6.5 6.5 0 1 1-8.691 8.691A6.5 6.5 0 0 1 0 6.5m5.144 6.358a5.5 5.5 0 1 0 7.714-7.714 6.5 6.5 0 0 1-7.714 7.714m-.733-1.269q.546.226 1.144.33l-1.474-1.474q.104.597.33 1.144m2.614.386a5.5 5.5 0 0 0 1.173-.242L4.374 7.91a6 6 0 0 0-.296 1.118zm2.157-.672q.446-.25.838-.576L5.418 6.126a6 6 0 0 0-.587.826zm1.545-1.284q.325-.39.576-.837L6.953 4.83a6 6 0 0 0-.827.587l4.6 4.602Zm1.006-1.822q.183-.562.242-1.172L9.028 4.078q-.58.096-1.118.296l3.823 3.824Zm.186-2.642a5.5 5.5 0 0 0-.33-1.144 5.5 5.5 0 0 0-1.144-.33z"/></svg>',
+};
+
+function setDockIcon(sel, svg) {
+  const host = $(sel)?.querySelector('.dock-icon');
+  if (host && host.innerHTML !== svg) host.innerHTML = svg;
+}
+
+/* ---- navigation mode ---- */
+
+/**
+ * Swaps what a left-drag does. The right button takes over the gesture the left
+ * one gave up, so pan mode does not cost you the ability to rotate at all -
+ * the toolbar looks the same either way, and nothing becomes unreachable.
+ */
+function setNavMode(mode) {
+  state.navMode = mode === 'pan' ? 'pan' : 'rotate';
+  const panning = state.navMode === 'pan';
+  controls.mouseButtons.LEFT = panning ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE;
+  controls.mouseButtons.RIGHT = panning ? THREE.MOUSE.ROTATE : THREE.MOUSE.PAN;
+  syncDockState();
+}
+
+function toggleNavMode() {
+  setNavMode(state.navMode === 'pan' ? 'rotate' : 'pan');
+  toast(state.navMode === 'pan' ? 'Pan mode — drag to pan' : 'Rotate mode — drag to rotate');
+}
+
+/* ---- zoom to selection ---- */
+
+function zoomToSelectionToggle() {
+  if (!state.selected) return;
+  if (state.zoomedToSelection) {
+    fitTo(state.bounds);
+    state.zoomedToSelection = false;
+  } else {
+    fitTo(new THREE.Box3().setFromObject(state.selected.object));
+    state.zoomedToSelection = true;
+  }
+  syncDockState();
+}
+
+/* ---- select visible ---- */
+
+/**
+ * Highlights every part still visible, tracked separately from `selected`.
+ *
+ * This viewer's selection is single-part by design - isolate, part transparency
+ * and the info panel all read `state.selected` - so promoting this to a real
+ * multi-selection would ripple through all of them. Keeping the highlight in its
+ * own list means "select visible" is a visual sweep that cannot confuse what
+ * "the selected part" means.
+ */
+function setSelectVisible(active) {
+  if (active === state.selectVisibleActive) return;
+  if (active) {
+    clearSelection();          // its highlight uses the same stash; don't double up
+    markSelectedRow(null);
+    state.visibleSelection = state.parts.filter((p) => p.visible && p.object.visible);
+    for (const p of state.visibleSelection) {
+      for (const m of p.meshes) {
+        if (m.userData._mat) continue;
+        m.userData._mat = m.material;
+        m.material = highlightFor(p);
+      }
+      p.object.userData._treeRow?.classList.add('selected');
+    }
+  } else {
+    for (const p of state.visibleSelection) {
+      for (const m of p.meshes) {
+        if (m.userData._mat) { m.material = m.userData._mat; delete m.userData._mat; }
+      }
+      p.object.userData._treeRow?.classList.remove('selected');
+    }
+    state.visibleSelection = [];
+  }
+  state.selectVisibleActive = active;
+  updateSelectionUI();
+  syncDockState();
+  requestRender();
+  if (active) toast(`${state.visibleSelection.length} visible part(s) selected`);
+}
+
+function toggleSelectVisible() { setSelectVisible(!state.selectVisibleActive); }
+
+/* ---- show parent ---- */
+
+function showParentFromSelection() {
+  if (!state.selected) return;
+  const parent = nearestNamedAncestor(state.selected.object.parent, state.root);
+  const part = state.partByObject.get(parent);
+  if (!part || part === state.selected) { toast('Already at the top of the assembly'); return; }
+  selectPart(part);
+  fitTo(new THREE.Box3().setFromObject(part.object));
+}
+
+/* ---- explode ---- */
+
+// Recomputing every part's position is far more expensive than a frame, so a
+// drag coalesces to one recompute per animation frame; both sliders share it.
+let explodePending = null;
+function queueExplode(v) {
+  if (explodePending !== null) { explodePending = v; return; }
+  explodePending = v;
+  requestAnimationFrame(() => {
+    const target = explodePending;
+    explodePending = null;
+    setExplodeStable(target);
+  });
+}
+
+/**
+ * The dock slider and the Settings-panel slider are two views of one number, so
+ * this is the only writer: whichever the user drags, both inputs and the panel's
+ * numeric read-out follow.
+ */
+function setExplodeAmount(factor) {
+  state.explodeValue = factor;
+  const dock = $('#dock-explode');
+  const opt = $('#opt-explode');
+  const val = $('#opt-explode-val');
+  if (dock && dock.value !== String(factor)) dock.value = String(factor);
+  if (opt && opt.value !== String(factor)) opt.value = String(factor);
+  if (val) val.textContent = factor.toFixed(2);
+  if (state.explodeEnabled) queueExplode(factor);
+}
+
+/**
+ * The toggle is separate from the amount so turning explode off and on again
+ * returns to where the slider was left, rather than resetting to zero.
+ */
+function setExplodeEnabled(enabled) {
+  state.explodeEnabled = enabled;
+  $('#explode-bar')?.classList.toggle('hidden', !enabled);
+  queueExplode(enabled ? state.explodeValue : 0);
+  syncDockState();
+}
+
+/* ---- more menu ---- */
+
+function closeMoreMenu() {
+  $('#dock-more-menu')?.classList.add('hidden');
+  $('#btn-more-dock')?.setAttribute('aria-expanded', 'false');
+}
+
+function toggleMoreMenu() {
+  const menu = $('#dock-more-menu');
+  if (!menu) return;
+  const opening = menu.classList.contains('hidden');
+  menu.classList.toggle('hidden', !opening);
+  $('#btn-more-dock')?.setAttribute('aria-expanded', String(opening));
+  if (opening) syncDockState();
+}
+
+const MORE_ACTIONS = {
+  part: togglePartTransparency,
+  isolate: isolateSelected,
+  info: () => $('#panel-info').classList.toggle('hidden'),
+  settings: () => togglePanel('#panel-settings'),
+  section: () => {
+    const shown = togglePanel('#panel-section');
+    if (shown) { $('#clip-on').checked = true; state.clip.enabled = true; updateClipping(); }
+  },
+  tree: toggleSidebar,
+};
+
+/* ---- the single renderer ---- */
+
+function syncDockState() {
+  const sel = !!state.selected;
+
+  // Navigation: the glyph and tooltip name the mode you are about to GET, which
+  // is why "pan mode" shows the pan arrows rather than the rotate loop.
+  const panning = state.navMode === 'pan';
+  setDockIcon('#btn-nav-mode', panning ? ICONS.navToRotate : ICONS.navToPan);
+  const nav = $('#btn-nav-mode');
+  if (nav) {
+    nav.title = panning ? 'Rotate Mode' : 'Pan Mode';
+    nav.setAttribute('aria-label', nav.title);
+    nav.classList.toggle('active', panning);
+  }
+
+  $('#btn-explode-toggle')?.classList.toggle('active', state.explodeEnabled);
+  const exp = $('#btn-explode-toggle');
+  if (exp) exp.title = state.explodeEnabled ? 'Disable Explode Model' : 'Explode Model';
+
+  const zoom = $('#btn-zoom-selected');
+  if (zoom) {
+    zoom.disabled = !sel;
+    zoom.title = !sel
+      ? 'Zoom to Selected (select a part first)'
+      : (state.zoomedToSelection ? 'Zoom Out to Model' : 'Zoom to Selected');
+  }
+
+  // Machine / Part chips carry a droplet when solid and the transparency glyph
+  // when transparent, the way the portal's chips do.
+  const machine = $('#btn-theme-chip');
+  if (machine) {
+    machine.classList.toggle('active', state.machineTransparent);
+    machine.title = state.machineTransparent
+      ? 'Switch to Machine Solid'
+      : 'Switch to Machine Transparent';
+  }
+  setDockIcon('#btn-theme-chip', state.machineTransparent ? ICONS.dropTransparent : ICONS.dropSolid);
+
+  // The chip reports the SELECTED part's own transparency, not a global flag -
+  // other parts may well be transparent at the same time.
+  const selTransparent = isPartTransparent(state.selected);
+  const part = $('#btn-part-chip');
+  if (part) {
+    part.disabled = !sel;
+    part.classList.toggle('active', selTransparent);
+    part.title = !sel
+      ? 'Part transparency requires a selected part'
+      : (selTransparent ? 'Switch selected part to Solid' : 'Switch selected part to Transparent');
+  }
+  setDockIcon('#btn-part-chip', selTransparent ? ICONS.dropTransparent : ICONS.dropSolid);
+
+  const iso = $('#btn-isolate');
+  if (iso) {
+    iso.disabled = !sel;
+    iso.classList.toggle('active', state.isolated);
+    iso.title = !sel
+      ? 'Isolate requires a selected part'
+      : (state.isolated ? 'Disable Isolate' : 'Isolate selected part');
+  }
+
+  $('#btn-select-visible')?.classList.toggle('active', state.selectVisibleActive);
+  const selVis = $('#btn-select-visible');
+  if (selVis) selVis.title = state.selectVisibleActive ? 'Unselect Visible Parts' : 'Select Visible Parts';
+
+  const parent = $('#btn-show-parent');
+  if (parent) {
+    parent.disabled = !sel;
+    parent.title = sel ? 'Show Parent in View' : 'Show Parent requires a selected part';
+  }
+
+  // The compact-width menu rows mirror the pills they stand in for, disabled
+  // state included - otherwise the action a phone user gets is the one the
+  // toolbar refuses to give a desktop user.
+  const menuPart = $('#dock-more-menu [data-action="part"]');
+  if (menuPart) { menuPart.disabled = !sel; menuPart.classList.toggle('active', selTransparent); }
+  const menuIso = $('#dock-more-menu [data-action="isolate"]');
+  if (menuIso) { menuIso.disabled = !sel; menuIso.classList.toggle('active', state.isolated); }
+
+  // Side-panel toggle: white with a blue glyph while the panel is shut, inverted
+  // while it is open, so the button states the panel's state instead of merely
+  // offering an action.
+  const menuBtn = $('#btn-menu-toggle');
+  if (menuBtn) {
+    const open = state.sidebarOpen;
+    const label = open ? 'Close Menu' : 'Open Menu';
+    menuBtn.classList.toggle('active', open);
+    menuBtn.setAttribute('aria-label', label);
+    menuBtn.setAttribute('aria-expanded', String(open));
+    setDockIcon('#btn-menu-toggle', open ? ICONS.menuOpen : ICONS.menuClosed);
+    const tip = $('#menu-toggle-tip');
+    if (tip) tip.textContent = label;
+  }
+}
+
 function wireUI() {
   $('#btn-sidebar').addEventListener('click', toggleSidebar);
   $('#btn-fit')?.addEventListener('click', () => fitTo(state.bounds));
-  const btnHome = $('#btn-home');
-  if (btnHome) btnHome.addEventListener('click', () => fitTo(state.bounds));
-  const btnPan = $('#btn-pan');
-  if (btnPan) btnPan.addEventListener('click', () => toast('Use right mouse drag to pan'));
-  const btnExpand = $('#btn-expand');
-  if (btnExpand) btnExpand.addEventListener('click', () => {
-    const el = document.documentElement;
-    if (!document.fullscreenElement && el.requestFullscreen) el.requestFullscreen().catch(() => {});
-    else if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
-  });
-  const btnThemeChip = $('#btn-theme-chip');
-  if (btnThemeChip) btnThemeChip.addEventListener('click', () => toast('Machine view active'));
-  const btnPartChip = $('#btn-part-chip');
-  if (btnPartChip) btnPartChip.addEventListener('click', () => {
-    if (state.selected) toast(state.selected.name || 'Part selected');
-    else toast('No part selected');
-  });
+
+  $('#btn-menu-toggle')?.addEventListener('click', toggleSidebar);
+
+  /* ---- bottom dock ---- */
+  $('#btn-home')?.addEventListener('click', () => resetView());
+  $('#btn-nav-mode')?.addEventListener('click', toggleNavMode);
+  $('#btn-explode-toggle')?.addEventListener('click', () => setExplodeEnabled(!state.explodeEnabled));
+  $('#dock-explode')?.addEventListener('input', (e) => setExplodeAmount(parseFloat(e.target.value)));
+  $('#btn-zoom-selected')?.addEventListener('click', zoomToSelectionToggle);
+  $('#btn-theme-chip')?.addEventListener('click', toggleMachineTransparency);
+  $('#btn-part-chip')?.addEventListener('click', togglePartTransparency);
   $('#btn-isolate')?.addEventListener('click', isolateSelected);
+  $('#btn-select-visible')?.addEventListener('click', toggleSelectVisible);
+  $('#btn-show-parent')?.addEventListener('click', showParentFromSelection);
+  $('#btn-help-dock')?.addEventListener('click', () => togglePanel('#panel-help'));
+
+  $('#btn-more-dock')?.addEventListener('click', (e) => { e.stopPropagation(); toggleMoreMenu(); });
+  $$('#dock-more-menu .dock-menu-item').forEach((item) =>
+    item.addEventListener('click', () => {
+      closeMoreMenu();
+      MORE_ACTIONS[item.dataset.action]?.();
+    })
+  );
+  // Click-away and Esc, so the menu behaves like the popup it imitates rather
+  // than a panel you have to click the same button again to dismiss.
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#dock-more-menu, #btn-more-dock')) closeMoreMenu();
+  });
+  window.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMoreMenu(); });
+
   $('#btn-hide').addEventListener('click', hideSelected);
   $('#btn-showall').addEventListener('click', showAll);
   $('#btn-edges')?.addEventListener('click', () => buildEdges());
@@ -1605,7 +2059,11 @@ function wireUI() {
     searchTimer = setTimeout(() => applyFilter(search.value), 220);
   });
 
-  $('#opt-shading').addEventListener('change', (e) => setShading(e.target.value));
+  $('#opt-shading').addEventListener('change', (e) => {
+    setShading(e.target.value);
+    if (e.target.value !== 'shaded' && state.shadedWire) setShadedWire(false);
+  });
+  $('#opt-shaded-wire')?.addEventListener('change', (e) => { setShadedWire(e.target.checked); });
   $('#opt-tone').addEventListener('change', (e) => setToneMapping(e.target.value));
   $('#opt-theme').addEventListener('change', (e) => applyTheme(e.target.value));
   $('#opt-grid').addEventListener('change', (e) => { grid.visible = e.target.checked; requestRender(); });
@@ -1635,19 +2093,14 @@ function wireUI() {
     renderer.toneMappingExposure = v;
     requestRender();
   });
-  // Exploding touches every part, so coalesce slider events to one per frame -
-  // otherwise a fast drag queues far more recomputes than can be drawn.
-  let explodePending = null;
+  // Frame-coalescing for the drag lives in queueExplode, shared with the dock slider.
   $('#opt-explode').addEventListener('input', (e) => {
     const v = parseFloat(e.target.value);
-    $('#opt-explode-val').textContent = v.toFixed(2);
-    if (explodePending !== null) { explodePending = v; return; }
-    explodePending = v;
-    requestAnimationFrame(() => {
-      const target = explodePending;
-      explodePending = null;
-      setExplodeStable(target);
-    });
+    setExplodeAmount(v);
+    // Dragging this slider used to explode the model on its own. Now that the
+    // dock owns an on/off toggle, moving it off zero implies "on" - otherwise
+    // the slider would silently do nothing until you found the toolbar button.
+    if (v > 0 && !state.explodeEnabled) setExplodeEnabled(true);
   });
   $('#opt-fov').addEventListener('input', (e) => {
     const v = parseFloat(e.target.value);
@@ -1733,12 +2186,17 @@ window.iSTP2HTML = {
 };
 
 async function boot() {
-  applyTheme(CFG.theme || 'dark');
+  // Light is the default because that is what the portal's GLB viewer is; the
+  // dark theme stays available from Settings and from --theme.
+  applyTheme(CFG.theme || 'light');
   setupEnvironment();
   wireUI();
+  setNavMode(state.navMode);      // also performs the first full dock render
+  setExplodeAmount(state.explodeValue);
   $('#opt-shading').value = state.shading;
+  syncShadedWireUI();
   $('#opt-tone').value = state.tone;
-  $('#opt-theme').value = CFG.theme || 'dark';
+  $('#opt-theme').value = CFG.theme || 'light';
   $('#opt-grid').checked = CFG.showGrid !== false;
   buildModelSwitcher();
   resize();
@@ -1749,6 +2207,8 @@ async function boot() {
   try {
     await loadModel();
     if (state.shading !== 'shaded') setShading(state.shading);
+    if (state.shadedWire) await setShadedWire(true);
+    if (state.machineTransparent) applyMachineTransparency(true);
     if (state.tone !== 'neutral') setToneMapping(state.tone);
   } catch (err) {
     failLoad(err);
