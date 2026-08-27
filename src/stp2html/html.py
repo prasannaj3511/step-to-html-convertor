@@ -229,7 +229,9 @@ body.legacy-single-file #viewer {
   min-width: 0;
   min-height: 0;
   background: #ffffff;
-  border-radius: 32px;
+  /* No radius: the canvas is full-bleed now, and rounded corners against the
+     viewport edge would show as white notches. */
+  border-radius: 0;
   overflow: hidden;
 }
 
@@ -270,10 +272,20 @@ body.legacy-single-file {
   --accent-dim: #1d99d6;
   --shadow: 0 18px 42px rgba(27, 39, 51, 0.12);
   font-family: Poppins, "Avenir Next", "Segoe UI", sans-serif;
-  background:
-    radial-gradient(circle at 14% 12%, rgba(29, 153, 214, 0.08), transparent 18%),
-    linear-gradient(180deg, #ffffff 0%, #f8f8f6 82%, #f3f3ef 100%);
+  background: #ffffff;
   color: var(--text);
+}
+
+/* Top title bar + floating hamburger are portal chrome; hide for ecom embed. */
+body.legacy-single-file #topbar,
+/* The open/close menu button is page chrome in this shell, not stage chrome:
+   fixed to the viewport's top-left, floating above the sidebar card (which
+   starts lower to leave it room - see the #sidebar top offset). */
+body.legacy-single-file #menu-toggle-wrap {
+  position: fixed;
+  top: 18px;
+  left: 18px;
+  z-index: 30;
 }
 
 body.legacy-single-file #app {
@@ -606,16 +618,22 @@ body.legacy-single-file .tb#btn-settings::before {
   font-size: 28px;
 }
 
+/* Full-bleed canvas: the model runs to the page edges and the chrome (menu
+   button, machine title, sidebar card) floats over it, the way the portal's
+   legacy viewer drew it - any top inset reads as an empty white bar. The
+   bottom inset keeps the disclaimer strip visible below the canvas. */
 body.legacy-single-file #viewercontainer {
   position: fixed;
-  inset: 72px 14px 18px 14px;
+  inset: 0 0 18px 0;
   display: block;
 }
 
 body.legacy-single-file #sidebar {
   position: absolute;
-  top: 4px;
-  left: 4px;
+  /* The menu button sits at 18px + 40px tall; the drawer follows 8px below
+     it so the two read as one control instead of floating apart. */
+  top: 66px;
+  left: 18px;
   bottom: 118px;
   width: 494px;
   border: 1px solid rgba(222, 222, 218, 0.95);
@@ -743,28 +761,12 @@ body.legacy-single-file #axis-note {
   opacity: 0.85;
 }
 
+/* The portal look has no view cube; its minimal colored-edge restyle read as
+   stray red/green/blue marks at the bottom-left. The standard views stay
+   reachable from the keyboard (0-6). */
 body.legacy-single-file #viewcube {
-  top: auto;
-  right: auto;
-  left: 18px;
-  bottom: 42px;
-  grid-template-columns: repeat(3, 18px);
-  gap: 2px;
+  display: none !important;
 }
-
-body.legacy-single-file #viewcube button {
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: transparent;
-  box-shadow: none;
-}
-
-body.legacy-single-file #viewcube button:nth-child(1) { border-bottom: 2px solid #405cff; }
-body.legacy-single-file #viewcube button:nth-child(2) { border-left: 2px solid #3ebd66; }
-body.legacy-single-file #viewcube button:nth-child(3) { border-right: 2px solid #ff6b6b; }
 
 body.legacy-single-file .panel {
   background: rgba(255, 255, 255, 0.96);

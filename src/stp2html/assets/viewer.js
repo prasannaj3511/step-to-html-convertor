@@ -1468,6 +1468,10 @@ async function buildEdges(thresholdDeg = 28) {
 /* --------------------------------------------------------------------- HUD */
 
 function updateHud() {
+  // The stats readout is optional chrome - the portal builds ship without the
+  // #hud element at all, and this also runs from collectParts before boot.
+  const hud = $('#hud');
+  if (!hud) return;
   const s = state.stats;
   // Draw-call and triangle counts are captured at render time: rendering is on
   // demand, so reading renderer.info here would report whatever the last frame
@@ -1477,7 +1481,7 @@ function updateHud() {
     ? 'idle'
     : String(Math.round(1000 / (state.frameTimes.reduce((a, b) => a + b, 0) / state.frameTimes.length)));
 
-  $('#hud').innerHTML =
+  hud.innerHTML =
     `<span class="k">fps  </span>${String(fps).padStart(5)}\n` +
     `<span class="k">draw </span>${String(fmtInt(state.lastCalls)).padStart(5)}\n` +
     `<span class="k">vis  </span>${String(fmtInt(state.lastTris)).padStart(5)}\n` +
@@ -2286,7 +2290,7 @@ async function boot() {
   tick();
   // The HUD must tick independently of the render loop: with rendering on
   // demand there are no frames at all while the user reads the screen.
-  setInterval(updateHud, 500);
+  if ($('#hud')) setInterval(updateHud, 500);
   try {
     await loadModel();
     if (state.shading !== 'shaded') setShading(state.shading);
