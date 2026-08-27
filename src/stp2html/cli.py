@@ -17,6 +17,7 @@ STEP_SUFFIXES = {".step", ".stp", ".p21", ".stpz"}
 DEFAULT_ROOT = Path(__file__).resolve().parents[2]
 
 
+
 def build_parser() -> argparse.ArgumentParser:
     quality_help = "; ".join(f"{k} ({v.label})" for k, v in QUALITY_PRESETS.items())
     p = argparse.ArgumentParser(

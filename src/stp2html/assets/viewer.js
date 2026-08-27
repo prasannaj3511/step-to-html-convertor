@@ -107,11 +107,24 @@ const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 10000);
 // world Y, so dragging can tumble the model over the poles and roll it about
 // the view axis - free rotation in every direction, not just azimuth/elevation.
 const controls = new TrackballControls(camera, canvas);
+// The damping factor and the speed values only make sense read together.
+// While a gesture's start point chases its end point, TrackballControls
+// re-applies the remaining delta every frame, so a pan drag travels an
+// effective panSpeed/damping and a wheel notch compounds by zoomSpeed/damping
+// - but rotation uses damping only for the after-release coast, which decays
+// by sqrt(1 - damping) per frame. That coupling is how the shipped 0.12/0.9
+// pair panned at 7.5x ("too sensitive") while rotation swung for over a
+// second after mouseup; it is also why staticMoving=true was the wrong cure -
+// it fixed the swing but collapsed pan to a flat 0.3x and reduced wheel zoom
+// to single weak steps. Strong damping keeps the smoothing and kills the
+// swing: at 0.4 the coast sheds to ~5% inside twelve frames (~200ms).
 controls.staticMoving = false;
-controls.dynamicDampingFactor = 0.12;
-controls.rotateSpeed = 3.0;
-controls.zoomSpeed = 1.0;
-controls.panSpeed = 0.9;
+controls.dynamicDampingFactor = 0.4;
+controls.rotateSpeed = 1.2;
+// Effective gains at 0.4 damping: pan 0.7/0.4 = 1.75x of the base distance
+// scale (a quarter of the old 7.5x), zoom exponent 2.0/0.4 = 5 (was 8.3).
+controls.zoomSpeed = 2.0;
+controls.panSpeed = 0.7;
 controls.mouseButtons = {
   LEFT: THREE.MOUSE.ROTATE,
   MIDDLE: THREE.MOUSE.DOLLY,
@@ -1645,6 +1658,9 @@ canvas.addEventListener('dblclick', (e) => {
 window.addEventListener('keydown', (e) => {
   if (e.target.matches('input, textarea, select')) return;
   const k = e.key.toLowerCase();
+  // Ahead of the map because Shift+F still lowercases to 'f', which would
+  // otherwise fit the selection instead of toggling fullscreen.
+  if (k === 'f' && e.shiftKey) { e.preventDefault(); toggleFullscreen(); return; }
   const map = {
     f: () => (state.selected ? fitTo(new THREE.Box3().setFromObject(state.selected.object)) : fitTo(state.bounds)),
     a: () => fitTo(state.bounds),
@@ -1741,11 +1757,69 @@ const ICONS = {
   menuClosed: '<svg viewBox="0 0 24 24"><path d="M3 18h18v-2H3zm0-5h18v-2H3zm0-7v2h18V6z"/></svg>',
   menuOpen: '<svg viewBox="0 0 24 24"><path d="M3 18h13v-2H3zm0-5h10v-2H3zm0-7v2h13V6zm18 9.59L17.42 12 21 8.41 19.59 7l-5 5 5 5z"/></svg>',
   dropTransparent: '<svg viewBox="0 0 16 16"><path d="M0 6.5a6.5 6.5 0 0 1 12.346-2.846 6.5 6.5 0 1 1-8.691 8.691A6.5 6.5 0 0 1 0 6.5m5.144 6.358a5.5 5.5 0 1 0 7.714-7.714 6.5 6.5 0 0 1-7.714 7.714m-.733-1.269q.546.226 1.144.33l-1.474-1.474q.104.597.33 1.144m2.614.386a5.5 5.5 0 0 0 1.173-.242L4.374 7.91a6 6 0 0 0-.296 1.118zm2.157-.672q.446-.25.838-.576L5.418 6.126a6 6 0 0 0-.587.826zm1.545-1.284q.325-.39.576-.837L6.953 4.83a6 6 0 0 0-.827.587l4.6 4.602Zm1.006-1.822q.183-.562.242-1.172L9.028 4.078q-.58.096-1.118.296l3.823 3.824Zm.186-2.642a5.5 5.5 0 0 0-.33-1.144 5.5 5.5 0 0 0-1.144-.33z"/></svg>',
+  // @mui/icons-material Fullscreen / FullscreenExit.
+  fullscreenEnter: '<svg viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7zm-2-4h2V7h3V5H5zm12 7h-3v2h5v-5h-2zM14 5v2h3v3h2V5z"/></svg>',
+  fullscreenExit: '<svg viewBox="0 0 24 24"><path d="M5 16h3v3h2v-5H5zm3-8H5v2h5V5H8zm6 11h2v-3h3v-2h-5zm2-11V5h-2v5h5V8z"/></svg>',
 };
 
 function setDockIcon(sel, svg) {
   const host = $(sel)?.querySelector('.dock-icon');
   if (host && host.innerHTML !== svg) host.innerHTML = svg;
+}
+
+/* ---- fullscreen ---- */
+
+/*
+ * Safari still ships these only under the webkit prefix, and iPhone Safari has
+ * no element fullscreen at all - hence the capability probe rather than a
+ * try/catch on click: a control that cannot work is better hidden than broken.
+ *
+ * The whole document goes fullscreen, not the canvas, so the dock and sidebar
+ * come along; fullscreening the canvas alone would take the model and leave
+ * every control behind.
+ */
+function fullscreenElement() {
+  return document.fullscreenElement || document.webkitFullscreenElement || null;
+}
+
+function fullscreenSupported() {
+  const el = document.documentElement;
+  return !!(el.requestFullscreen || el.webkitRequestFullscreen);
+}
+
+function toggleFullscreen() {
+  const el = document.documentElement;
+  const request = el.requestFullscreen || el.webkitRequestFullscreen;
+  const exit = document.exitFullscreen || document.webkitExitFullscreen;
+  const active = !!fullscreenElement();
+  if (active ? !exit : !request) return;
+  // Browsers reject the request outside a user gesture, and an unhandled
+  // rejection would surface in the console as an error the user cannot act on.
+  Promise.resolve(active ? exit.call(document) : request.call(el)).catch(() =>
+    toast('Fullscreen was blocked by the browser')
+  );
+}
+
+function syncFullscreenButton() {
+  const btn = $('#btn-fullscreen');
+  if (!btn) return;
+  const active = !!fullscreenElement();
+  const label = active ? 'Exit Fullscreen' : 'Fullscreen';
+  btn.title = label + ' (Shift+F)';
+  btn.setAttribute('aria-label', label);
+  btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  setDockIcon('#btn-fullscreen', active ? ICONS.fullscreenExit : ICONS.fullscreenEnter);
+}
+
+/*
+ * Fires for Esc and F11 too, not just the button, so the icon stays honest
+ * however the mode was left. TrackballControls caches the canvas rect for its
+ * drag maths, so resizeForce() - which calls handleResize() - has to run here
+ * or rotation stays calibrated to the old viewport.
+ */
+function onFullscreenChange() {
+  syncFullscreenButton();
+  resizeForce();
 }
 
 /* ---- navigation mode ---- */
@@ -2019,6 +2093,15 @@ function wireUI() {
   $('#btn-select-visible')?.addEventListener('click', toggleSelectVisible);
   $('#btn-show-parent')?.addEventListener('click', showParentFromSelection);
   $('#btn-help-dock')?.addEventListener('click', () => togglePanel('#panel-help'));
+
+  if (fullscreenSupported()) {
+    $('#btn-fullscreen')?.addEventListener('click', toggleFullscreen);
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+    syncFullscreenButton();
+  } else {
+    $('#btn-fullscreen')?.classList.add('hidden');
+  }
 
   $('#btn-more-dock')?.addEventListener('click', (e) => { e.stopPropagation(); toggleMoreMenu(); });
   $$('#dock-more-menu .dock-menu-item').forEach((item) =>
