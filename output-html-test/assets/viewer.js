@@ -1246,7 +1246,7 @@ function hideSelected() {
   clearSelection();
   updateSelectionUI();
   requestRender();
-  toast('Hid ' + p.name);
+  toast('Hidden ' + p.name);
 }
 
 /* ----------------------------------------------------------------- explode */

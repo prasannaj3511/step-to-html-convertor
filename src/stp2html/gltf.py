@@ -116,9 +116,94 @@ def write_glb(
     ok = writer.Perform(doc, info_map, Message_ProgressRange())
     if not ok:
         raise RuntimeError(f"glTF export failed for {out_path}")
+    sanitize_glb(out_path)
     size = out_path.stat().st_size
     log(f"wrote {out_path.name} ({human_bytes(size)}) in {time.time() - t0:.1f}s")
     return out_path
+
+
+def sanitize_glb(path: Path) -> dict:
+    """Drop primitives OCCT could not triangulate, so the file is valid glTF.
+
+    RWGltf_CafWriter emits a primitive with accessor index -1 for a shape that
+    produced no triangles (typically an empty COMPOUND). Every consumer trips
+    on it: three.js dies with "Cannot read properties of undefined (reading
+    'bufferView')" and gltfpack refuses the file as "invalid GLTF" - which, in
+    turn, used to make optimize_glb ship the raw 100MB+ export unpacked. The
+    accessors and binary payload are left untouched; only the dangling
+    references go, and a node whose mesh ends up empty just loses the mesh.
+    """
+    with open(path, "rb") as fh:
+        header = fh.read(12)
+        magic, version, total = struct.unpack("<III", header)
+        if magic != GLB_MAGIC or version != 2:
+            raise RuntimeError(f"{path.name} is not a GLB v2 file")
+        json_len, json_type = struct.unpack("<II", fh.read(8))
+        doc = json.loads(fh.read(json_len).decode("utf-8"))
+        bin_len, bin_type = struct.unpack("<II", fh.read(8))
+        payload = fh.read(bin_len)
+        if len(payload) != bin_len:
+            raise RuntimeError(f"{path.name}: BIN chunk truncated ({len(payload)} of {bin_len} bytes)")
+
+    accessors = doc.get("accessors", [])
+
+    def dangling(index) -> bool:
+        return not isinstance(index, int) or index < 0 or index >= len(accessors)
+
+    dropped, empty_meshes = 0, set()
+    for mesh_index, mesh in enumerate(doc.get("meshes", [])):
+        prims = mesh.get("primitives", [])
+        keep = [
+            prim for prim in prims
+            if not any(dangling(i) for i in prim.get("attributes", {}).values())
+            and not ("indices" in prim and dangling(prim["indices"]))
+        ]
+        dropped += len(prims) - len(keep)
+        mesh["primitives"] = keep
+        if not keep:
+            empty_meshes.add(mesh_index)
+
+    # OCCT names the leaf that carries the mesh after its shape type
+    # ("COMPOUND", "SOLID" ...); the part a person would recognise is the
+    # nearest ancestor with a real name, so report that instead.
+    nodes = doc.get("nodes", [])
+    parent_of = {child: index for index, node in enumerate(nodes) for child in node.get("children", [])}
+    shape_words = {"COMPOUND", "COMPSOLID", "SOLID", "SHELL", "FACE", "WIRE", "EDGE", "VERTEX", "SHAPE"}
+
+    def part_name(index: int) -> str:
+        while index is not None:
+            name = (nodes[index].get("name") or "").strip()
+            if name and name.upper() not in shape_words:
+                return name
+            index = parent_of.get(index)
+        return "<unnamed>"
+
+    detached = []
+    for index, node in enumerate(nodes):
+        if node.get("mesh") in empty_meshes:
+            detached.append(part_name(index))
+            del node["mesh"]
+
+    stats = {"dropped_primitives": dropped, "detached_nodes": len(detached)}
+    if not dropped:
+        return stats
+
+    body = json.dumps(doc, separators=(",", ":")).encode("utf-8")
+    body += b" " * (-len(body) % 4)
+    with open(path, "wb") as fh:
+        fh.write(struct.pack("<III", GLB_MAGIC, 2, 12 + 8 + len(body) + 8 + bin_len))
+        fh.write(struct.pack("<II", len(body), json_type))
+        fh.write(body)
+        fh.write(struct.pack("<II", bin_len, bin_type))
+        fh.write(payload)
+
+    names = ", ".join(sorted(set(detached))[:8]) + (" ..." if len(set(detached)) > 8 else "")
+    warn(
+        f"{path.name}: removed {dropped} empty primitive(s) the CAD kernel could not "
+        f"triangulate ({len(detached)} placement(s) of: {names}). Those parts will not "
+        f"render; check the source geometry if they matter."
+    )
+    return stats
 
 
 def find_gltfpack(explicit: str | None = None) -> str | None:
@@ -213,6 +298,10 @@ def optimize_glb(src: Path, dst: Path, opts: PackOptions) -> tuple[Path, dict]:
         cmd += ["-si", f"{opts.simplify:g}", "-se", f"{opts.simplify_error:g}", "-slb"]
 
     log("optimizing: " + " ".join(Path(c).name if os.sep in c else c for c in cmd))
+    # A file left at `dst` by an earlier run would pass the validity check below
+    # and be reported as packed even when gltfpack wrote nothing.
+    if dst.exists() and dst != src:
+        dst.unlink()
     t0 = time.time()
     proc = subprocess.run(cmd, capture_output=True, text=True)
 
@@ -223,9 +312,14 @@ def optimize_glb(src: Path, dst: Path, opts: PackOptions) -> tuple[Path, dict]:
     # only fall back when it is genuinely unusable.
     produced_valid = dst.exists() and is_valid_glb(dst)
     if not produced_valid:
-        warn(f"gltfpack produced no usable output (exit {proc.returncode}); using unoptimized glTF")
-        if proc.stderr:
-            warn(proc.stderr.strip()[:2000])
+        warn(
+            f"gltfpack produced no usable output (exit {proc.returncode}) - SHIPPING THE "
+            f"UNOPTIMIZED glTF ({human_bytes(src.stat().st_size)}). The page will load "
+            f"several times slower; the manifest records compressed=false."
+        )
+        for stream in (proc.stderr, proc.stdout):
+            if stream and stream.strip():
+                warn(stream.strip()[:2000])
         if src != dst:
             shutil.copy2(src, dst)
         stats["output_bytes"] = dst.stat().st_size

@@ -465,6 +465,12 @@ function setToneMapping(name) {
 
 function applyMachineTransparency(enabled) {
   if (!state.root) return;
+  // The selection swaps a highlight material onto the part, so it has to be
+  // lifted before the traverse records each material's "solid" baseline -
+  // otherwise the highlight would be captured as the base. It is restored
+  // afterwards, which also leaves the picked part opaque against the
+  // now-transparent machine.
+  const keepSelected = state.selected;
   clearSelection();
   state.root.traverse((o) => {
     if (!o.isMesh) return;
@@ -486,6 +492,7 @@ function applyMachineTransparency(enabled) {
     }
   });
   state.machineTransparent = enabled;
+  if (keepSelected) selectPart(keepSelected, { fromTree: true });
   syncDockState();
   updateSelectionUI();
   requestRender();
@@ -964,6 +971,18 @@ const raycaster = new THREE.Raycaster();
 raycaster.firstHitOnly = true;
 const pointer = new THREE.Vector2();
 
+// Visibility is inherited: hiding a part flips the flag on its owner node, not
+// on the meshes beneath it, so a mesh can report visible=true while nothing of
+// it is drawn. The raycaster does not know that and still returns such meshes -
+// which is how a hidden part kept swallowing clicks meant for what is behind it.
+function isDrawn(obj) {
+  for (let cur = obj; cur; cur = cur.parent) {
+    if (!cur.visible) return false;
+    if (cur === state.root) break;
+  }
+  return true;
+}
+
 function pickAt(clientX, clientY) {
   const rect = canvas.getBoundingClientRect();
   pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
@@ -971,7 +990,7 @@ function pickAt(clientX, clientY) {
   raycaster.setFromCamera(pointer, camera);
   const hits = raycaster.intersectObject(state.root, true);
   for (const h of hits) {
-    if (!h.object.visible) continue;
+    if (!isDrawn(h.object)) continue;
     if (state.clip.enabled && state.clip.plane && state.clip.plane.distanceToPoint(h.point) < 0) continue;
     return h;
   }
@@ -1189,6 +1208,7 @@ function showAll() {
   $$('.trow').forEach((r) => r.classList.remove('dimmed'));
   $$('.teye').forEach((e) => { e.textContent = '◉'; });
   syncDockState();
+  window.dispatchEvent(new CustomEvent('istp2html:visibility', { detail: { part: null, visible: true } }));
   requestRender();
 }
 
@@ -1246,20 +1266,30 @@ function isolateSelected() {
   }
 }
 
-function hideSelected() {
-  if (!state.selected) { toast('Select a part first'); return; }
-  const p = state.selected;
-  setObjectVisible(p.object, false);
-  const row = p.object.userData._treeRow;
+/**
+ * Hide one part and tell the page about it. The event is what lets an overlay
+ * panel (the portal's parts tree) repaint its eye icons - it owns its own DOM
+ * and cannot see a visibility flag flipped in here.
+ */
+function hidePart(part) {
+  if (!part) return;
+  setObjectVisible(part.object, false);
+  const row = part.object.userData._treeRow;
   if (row) {
     row.classList.add('dimmed');
     const eye = row.querySelector('.teye');
     if (eye) eye.textContent = '○';
   }
-  clearSelection();
+  if (state.selected === part) clearSelection();
   updateSelectionUI();
   requestRender();
-  toast('Hid ' + p.name);
+  window.dispatchEvent(new CustomEvent('istp2html:visibility', { detail: { part: part.name, visible: false } }));
+  toast('Hidden ' + part.name);
+}
+
+function hideSelected() {
+  if (!state.selected) { toast('Select a part first'); return; }
+  hidePart(state.selected);
 }
 
 /* ----------------------------------------------------------------- explode */
@@ -1648,15 +1678,15 @@ canvas.addEventListener('pointerup', (e) => {
   if (part) selectPart(part);
 });
 
+// Double-click hides the part under the cursor - the quickest way to dig into
+// an assembly. Show All (R, or the dock) brings everything back. Away from the
+// model it still fits the whole thing, which is the usual "reset" reflex.
 canvas.addEventListener('dblclick', (e) => {
   const hit = pickAt(e.clientX, e.clientY);
-  if (hit) {
-    const part = state.partByObject.get(hit.object) ||
-      state.partByObject.get(nearestNamedAncestor(hit.object, state.root));
-    if (part) { selectPart(part); fitTo(new THREE.Box3().setFromObject(part.object)); }
-  } else {
-    fitTo(state.bounds);
-  }
+  if (!hit) { fitTo(state.bounds); return; }
+  const part = state.partByObject.get(hit.object) ||
+    state.partByObject.get(nearestNamedAncestor(hit.object, state.root));
+  if (part) hidePart(part);
 });
 
 window.addEventListener('keydown', (e) => {

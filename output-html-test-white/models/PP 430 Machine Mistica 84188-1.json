@@ -1,0 +1,54 @@
+{
+  "generator": "iSTP2HTML 1.0.0",
+  "generatedAt": "2026-08-28T19:15:17",
+  "source": {
+    "file": "PP 430 Machine Mistica 84188-1.stp",
+    "bytes": 171728141,
+    "schema": "AUTOMOTIVE_DESIGN { 1 0 10303 214 3 1 1 }",
+    "originatingSystem": "Autodesk Inventor 2024",
+    "preprocessor": "ST-DEVELOPER v20",
+    "timestamp": "2026-08-19T16:52:18-05:00",
+    "name": "PP 430 Machine Mistica 84188-1.stp"
+  },
+  "model": {
+    "file": "models/PP 430 Machine Mistica 84188-1.glb",
+    "bytes": 15741540,
+    "units": "MM",
+    "unitScale": 1000.0,
+    "upAxis": "Y",
+    "compressed": true
+  },
+  "stats": {
+    "uniqueParts": 831,
+    "instances": 2751,
+    "placements": 3692,
+    "assemblies": 138,
+    "roots": 1,
+    "faces": 62306,
+    "uniqueTriangles": 4349974,
+    "renderedTriangles": 12808176,
+    "uniqueVertices": 3682534,
+    "meshFailures": 0,
+    "quality": "high",
+    "conversionSeconds": 709.6,
+    "rawGlbBytes": 116093396,
+    "finalGlbBytes": 15741540,
+    "hadAuthoredColors": true
+  },
+  "bbox": {
+    "min": [
+      -33756.2505260039,
+      -1740.4128151820503,
+      -1045.0000001
+    ],
+    "max": [
+      4951.53049735209,
+      19746.928417597202,
+      1798.0000001
+    ]
+  },
+  "environment": {
+    "python": "3.14.7",
+    "platform": "Windows-11-10.0.26200-SP0"
+  }
+}
