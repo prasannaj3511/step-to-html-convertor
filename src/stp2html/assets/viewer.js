@@ -75,6 +75,7 @@ const state = {
   selectVisibleActive: false,
   visibleSelection: [],     // parts highlighted by "Select Visible", kept apart from
                             // `selected` so isolate/part-transparency still mean one part
+  hovered: null,            // part under the cursor (yellow preview; never the selected part)
   zoomedToSelection: false,
   sidebarOpen: true,
   // Isolate is a MODE, not a one-shot: it follows the selection, and the backup
@@ -104,7 +105,7 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 // designer painted pure red renders noticeably off. Neutral keeps assigned
 // colours close to their nominal value while still taming highlights.
 renderer.toneMapping = THREE.NeutralToneMapping;
-renderer.toneMappingExposure = 0;
+renderer.toneMappingExposure = 0.5;
 renderer.localClippingEnabled = true;
 renderer.info.autoReset = false;
 
@@ -513,6 +514,7 @@ function applyGhostPass(enabled) {
   // afterwards, which also leaves the picked part opaque against the
   // now-transparent machine.
   const keepSelected = state.selected;
+  clearHover();
   clearSelection();
   // The sweep / occurrence highlight (state.visibleSelection - Select Visible,
   // and the Order Parts overlay's Select All Occurrences) puts the SAME shared
@@ -536,8 +538,8 @@ function applyGhostPass(enabled) {
     const mats = Array.isArray(o.material) ? o.material : [o.material];
     for (const m of mats) {
       if (!m) continue;
-      // The highlight look is never a machine surface; belt and braces.
-      if (m === HIGHLIGHT || m === HIGHLIGHT_TRANSPARENT) continue;
+      // The highlight / hover look is never a machine surface; belt and braces.
+      if (m === HIGHLIGHT || m === HIGHLIGHT_TRANSPARENT || m === HOVER) continue;
       if (!m.userData._machineSurface) {
         m.userData._machineSurface = {
           transparent: !!m.transparent,
@@ -1071,8 +1073,48 @@ HIGHLIGHT_TRANSPARENT.transparent = true;
 HIGHLIGHT_TRANSPARENT.opacity = PART_TRANSPARENT_OPACITY;
 HIGHLIGHT_TRANSPARENT.depthWrite = false;
 
+// Cursor-follow preview. Yellow so it never reads as the blue selection /
+// occurrence paint. Lives on its own stash key (`_hoverMat`) so it cannot
+// steal `_mat` from selection or the select-visible sweep.
+const HOVER = new THREE.MeshStandardMaterial({
+  color: 0xffd54f,
+  emissive: 0x8a6a00,
+  metalness: 0.08,
+  roughness: 0.45,
+  side: THREE.FrontSide,
+});
+
 function highlightFor(part) {
   return isPartTransparent(part) ? HIGHLIGHT_TRANSPARENT : HIGHLIGHT;
+}
+
+function clearHover() {
+  const p = state.hovered;
+  if (!p) return;
+  for (const m of p.meshes || []) {
+    if (m.userData._hoverMat) {
+      m.material = m.userData._hoverMat;
+      delete m.userData._hoverMat;
+    }
+  }
+  state.hovered = null;
+}
+
+function setHover(part) {
+  if (part === state.hovered) return;
+  clearHover();
+  // Selected / occurrence-painted parts already wear blue; yellow on top of
+  // that would fight the stash and look like a flicker.
+  if (!part || part === state.selected) return;
+  if (state.visibleSelection && state.visibleSelection.indexOf(part) !== -1) return;
+
+  state.hovered = part;
+  for (const m of part.meshes || []) {
+    if (m.userData._mat || m.userData._hoverMat) continue;
+    m.userData._hoverMat = m.material;
+    m.material = HOVER;
+  }
+  requestRender();
 }
 
 function selectPart(part, { focus = false, fromTree = false } = {}) {
@@ -1080,6 +1122,9 @@ function selectPart(part, { focus = false, fromTree = false } = {}) {
     if (focus) fitTo(new THREE.Box3().setFromObject(part.object));
     return;
   }
+  // Drop hover before selection so `_hoverMat` cannot be captured as the
+  // "original" material when selection stashes `_mat`.
+  clearHover();
   // A sweep-highlight and a single selection both stash the original material on
   // the same key, and both mark tree rows `selected`. Picking a part ends the
   // sweep so neither can strip the other's state out from under it.
@@ -1929,9 +1974,41 @@ function tick() {
 /* ------------------------------------------------------------------- input */
 
 let downPos = null;
+let hoverRaf = 0;
+
+function partFromHit(hit) {
+  if (!hit) return null;
+  return state.partByObject.get(hit.object) ||
+    state.partByObject.get(nearestNamedAncestor(hit.object, state.root)) ||
+    null;
+}
 
 canvas.addEventListener('pointerdown', (e) => {
   downPos = { x: e.clientX, y: e.clientY, t: performance.now(), b: e.button };
+  // Orbit / pan starts: drop the yellow preview so it does not stick to a
+  // part the cursor is no longer over.
+  if (e.button === 0 || e.button === 2) clearHover();
+});
+
+canvas.addEventListener('pointermove', (e) => {
+  // Skip while a button is held (orbit/pan) or while measuring — those modes
+  // own the pointer. Throttle to one raycast per frame.
+  if (downPos || (state.measure && state.measure.active)) {
+    if (state.hovered) { clearHover(); requestRender(); }
+    return;
+  }
+  const x = e.clientX;
+  const y = e.clientY;
+  if (hoverRaf) cancelAnimationFrame(hoverRaf);
+  hoverRaf = requestAnimationFrame(() => {
+    hoverRaf = 0;
+    setHover(partFromHit(pickAt(x, y)));
+  });
+});
+
+canvas.addEventListener('pointerleave', () => {
+  if (hoverRaf) { cancelAnimationFrame(hoverRaf); hoverRaf = 0; }
+  if (state.hovered) { clearHover(); requestRender(); }
 });
 
 canvas.addEventListener('pointerup', (e) => {
@@ -1950,14 +2027,14 @@ canvas.addEventListener('pointerup', (e) => {
   }
 
   if (!hit) {
+    clearHover();
     clearSelection();
     updateSelectionUI();
     markSelectedRow(null);
     requestRender();
     return;
   }
-  const part = state.partByObject.get(hit.object) ||
-    state.partByObject.get(nearestNamedAncestor(hit.object, state.root));
+  const part = partFromHit(hit);
   if (part) selectPart(part);
 });
 
@@ -2605,6 +2682,8 @@ window.iSTP2HTML = {
   controls,
   requestRender,
   selectPart,
+  setHover,
+  clearHover,
   setShowMachine,
   toggleShowMachine,
   fitTo,

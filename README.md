@@ -307,10 +307,30 @@ file actually contains — useful when a model's colours are not what you expect
 ## Requirements
 
 - Python 3.10+ with `cadquery-ocp` (OpenCASCADE 7.9 bindings) and `numpy`
-- Node.js, for `gltfpack` and the vendored three.js (`cd tools && npm install`)
+- `gltfpack`, for meshopt compression (see below)
+- Node.js, for the vendored three.js and the test scripts (`cd tools && npm install`)
 
 Without `gltfpack` the pipeline still works but ships the uncompressed glTF —
 roughly 6× larger — and warns.
+
+### Installing gltfpack
+
+Two builds exist and the converter prefers the **native** one, which needs no
+Node at all:
+
+1. Download `gltfpack-<platform>.zip` from
+   [meshoptimizer releases](https://github.com/zeux/meshoptimizer/releases).
+2. Extract the executable into `tools/` (`tools/gltfpack.exe` on Windows,
+   `tools/gltfpack` elsewhere). It is found automatically, and gitignored.
+
+`npm install` inside `tools/` also provides gltfpack, but that is a WebAssembly
+build run through Node and it **requires Node 18 or newer** (`"engines":
+{"node": ">=18"}`). On an older Node it fails at `WebAssembly.compile` and the
+pipeline falls back to the uncompressed glTF, roughly 7× larger. If a repo is
+pinned to an old Node for other reasons, use the native binary.
+
+Verify with `tools/gltfpack.exe -v`, or check that a conversion's manifest ends
+up with `"compressed": true`.
 
 Peak memory on the 340 MB sample is about 1 GB.
 

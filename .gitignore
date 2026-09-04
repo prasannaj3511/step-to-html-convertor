@@ -10,6 +10,12 @@ dist/
 tools/node_modules/
 tools/package-lock.json
 
+# Native gltfpack, downloaded per-platform (see Requirements in README.md).
+# Not committed: it is a 3 MB platform-specific binary, and the one that is
+# right for Windows is useless on macOS/Linux.
+tools/gltfpack.exe
+tools/gltfpack
+
 # Generated output. Delete these lines if you want to commit a built viewer.
 output-html/
 

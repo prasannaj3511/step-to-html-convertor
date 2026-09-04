@@ -207,25 +207,45 @@ def sanitize_glb(path: Path) -> dict:
 
 
 def find_gltfpack(explicit: str | None = None) -> str | None:
-    """Locate a gltfpack executable: explicit > project-vendored > PATH."""
+    """Locate a gltfpack executable: explicit > native > npm-vendored > PATH.
+
+    The NATIVE binary is preferred over the npm package on purpose. npm ships
+    gltfpack as WebAssembly run through Node, and that build requires Node 18+
+    ("engines": {"node": ">=18"}); on an older Node it dies at
+    WebAssembly.compile and the pipeline silently falls back to shipping the
+    uncompressed glTF, ~7x larger. The native executable has no Node dependency
+    at all, so a repo pinned to an old Node for other reasons still packs.
+    """
     if explicit:
         p = Path(explicit)
         return str(p) if p.exists() else (shutil.which(explicit) or None)
 
     is_windows = sys.platform.startswith("win")
-    local_candidates = (
+    native_names = ("gltfpack.exe",) if is_windows else ("gltfpack",)
+    npm_candidates = (
         "gltfpack.cmd", "gltfpack"
     ) if is_windows else (
         "gltfpack", "gltfpack.cmd"
     )
 
     here = Path(__file__).resolve()
-    for root in list(here.parents)[:5]:
+    roots = list(here.parents)[:5]
+
+    # Native binary, dropped straight into tools/ or the project root.
+    for root in roots:
+        for rel in (Path("tools"), Path(".")):
+            for name in native_names:
+                candidate = root / rel / name
+                if candidate.is_file():
+                    return str(candidate)
+
+    # npm package (needs Node 18+).
+    for root in roots:
         for rel in (
             Path("tools") / "node_modules" / ".bin",
             Path("node_modules") / ".bin",
         ):
-            for name in local_candidates:
+            for name in npm_candidates:
                 candidate = root / rel / name
                 if candidate.exists():
                     return str(candidate)
@@ -320,6 +340,18 @@ def optimize_glb(src: Path, dst: Path, opts: PackOptions) -> tuple[Path, dict]:
         for stream in (proc.stderr, proc.stdout):
             if stream and stream.strip():
                 warn(stream.strip()[:2000])
+        # The npm build is WebAssembly executed by Node and needs Node 18+. On an
+        # older Node it fails here, in a way that says nothing about Node - so
+        # name the cause and the fix instead of leaving a WASM trace behind.
+        blob = f"{proc.stderr or ''}{proc.stdout or ''}"
+        if "WebAssembly" in blob or "wasm" in blob.lower():
+            warn(
+                "That is the npm (WebAssembly) build of gltfpack refusing to start, which "
+                "almost always means Node is older than the 18 it requires. Either upgrade "
+                "Node, or drop the native binary into tools/ (no Node needed) from "
+                "https://github.com/zeux/meshoptimizer/releases - it is picked up "
+                "automatically."
+            )
         if src != dst:
             shutil.copy2(src, dst)
         stats["output_bytes"] = dst.stat().st_size
