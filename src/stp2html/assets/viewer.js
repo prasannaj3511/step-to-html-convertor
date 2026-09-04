@@ -57,10 +57,18 @@ const state = {
   shading: CFG.shading === 'shaded-wire' ? 'shaded' : (CFG.shading || 'shaded'),
   shadedWire: CFG.shading === 'shaded-wire',
   machineTransparent: false,
+  // "Show Machine": the dock pill that ghosts everything EXCEPT the current
+  // selection (a single pick, or the select-visible / occurrence sweep). Its
+  // own mode, independent of the Machine pill - both feed ONE ghost pass
+  // (applyGhostPass) so they can never fight over materials.
+  showMachine: false,
   // --- bottom dock, mirroring the portal's GLB viewer toolbar ---
   navMode: 'rotate',        // gesture the LEFT mouse button performs
-  // Per-part transparency accumulates: making one part see-through leaves the
-  // previous ones see-through, so several can be compared at once.
+  // Part transparency is a MODE, matching the portal's GLB viewer: while it is
+  // on, every part you select goes see-through and STAYS that way as you move
+  // on to the next one, so several can be compared at once. Leaving the mode
+  // puts all of them back to solid in one go.
+  partTransparentMode: false,
   transparentParts: new Set(),
   explodeEnabled: false,    // the dock toggle; the amount below survives turning it off
   explodeValue: 0.5,
@@ -96,7 +104,7 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 // designer painted pure red renders noticeably off. Neutral keeps assigned
 // colours close to their nominal value while still taming highlights.
 renderer.toneMapping = THREE.NeutralToneMapping;
-renderer.toneMappingExposure = 1.0;
+renderer.toneMappingExposure = 0;
 renderer.localClippingEnabled = true;
 renderer.info.autoReset = false;
 
@@ -173,7 +181,12 @@ let grid = null;
 
 /* ----------------------------------------------------------------- helpers */
 
-function requestRender() { state.needsRender = true; }
+function requestRender() {
+  state.needsRender = true;
+  // Edge lines follow their meshes the moment a frame is asked for (tick
+  // repeats it, for visibility flipped without a request in between).
+  syncEdgeVisibility();
+}
 
 function toast(msg, ms = 1700) {
   const el = $('#toast');
@@ -320,12 +333,14 @@ function disposeModel() {
   state.edgeGroup = null;
   state.explode = 0;
   state.machineTransparent = false;
+  state.showMachine = false;
   state.frameTimes = [];
   // Everything below describes the model being torn down, so it cannot survive
   // into the next one. Part transparency lives on the shared HIGHLIGHT material
   // rather than on a mesh, so it needs clearing explicitly or it leaks across
   // model switches.
   state.transparentParts.clear();
+  state.partTransparentMode = false;
   state.zoomedToSelection = false;
   state.selectVisibleActive = false;
   state.visibleSelection = [];
@@ -368,7 +383,7 @@ async function switchModel(index) {
     // Shading is a viewer preference, so carry it across the switch.
     if (state.shading === 'flat') setShading('flat');
     if (state.shadedWire) await setShadedWire(true);
-    if (state.machineTransparent) applyMachineTransparency(true);
+    reapplyGhost();
     toast(`Loaded ${entry.title || entry.name}`);
   } catch (err) {
     failLoad(err);
@@ -377,7 +392,7 @@ async function switchModel(index) {
 
 /* ------------------------------------------------------- scene preparation */
 
-const MAT_DEFAULTS = { metalness: 0.12, roughness: 0.52 };
+const MAT_DEFAULTS = { metalness: 0, roughness: 0.52 };
 
 const TONE_MAPPINGS = {
   none: THREE.NoToneMapping,
@@ -425,7 +440,7 @@ function setShading(mode) {
   renderer.toneMapping = mode === 'flat'
     ? THREE.NoToneMapping
     : (TONE_MAPPINGS[state.tone] ?? THREE.NeutralToneMapping);
-  if (state.machineTransparent) applyMachineTransparency(true);
+  reapplyGhost();
   forEachMaterial((m) => { m.needsUpdate = true; });
   updateSelectionUI();
   requestRender();
@@ -463,7 +478,34 @@ function setToneMapping(name) {
   requestRender();
 }
 
+/** True while anything wants the machine ghosted: the Machine pill, Show Machine, or both. */
+function ghostWanted() { return !!(state.machineTransparent || state.showMachine); }
+
+/** Re-runs the ghost pass after something rebuilt materials (model switch, shading). */
+function reapplyGhost() { if (ghostWanted()) applyGhostPass(true); }
+
+/** "Selected" for the selection-gated pills: a single pick OR a live sweep. */
+function hasSelection() {
+  return !!state.selected || (!!state.selectVisibleActive && (state.visibleSelection || []).length > 0);
+}
+
+/**
+ * The Machine pill: its flag plus the shared ghost pass. Because the pass is
+ * shared with Show Machine, switching either mode off only un-ghosts the
+ * machine when the OTHER one is off too - neither can strand the other.
+ */
 function applyMachineTransparency(enabled) {
+  state.machineTransparent = !!enabled;
+  applyGhostPass(ghostWanted());
+}
+
+/**
+ * The one routine that ghosts / un-ghosts the machine. Everything that is not
+ * wearing a highlight (single selection, select-visible sweep, the overlay's
+ * occurrence paint) goes to 20% - the selected parts stay solid on top of a
+ * see-through machine - or returns to its recorded solid baseline.
+ */
+function applyGhostPass(enabled) {
   if (!state.root) return;
   // The selection swaps a highlight material onto the part, so it has to be
   // lifted before the traverse records each material's "solid" baseline -
@@ -472,11 +514,30 @@ function applyMachineTransparency(enabled) {
   // now-transparent machine.
   const keepSelected = state.selected;
   clearSelection();
+  // The sweep / occurrence highlight (state.visibleSelection - Select Visible,
+  // and the Order Parts overlay's Select All Occurrences) puts the SAME shared
+  // highlight material on more meshes. Left in place, the traverse below
+  // retinted that shared material to 20%: every highlighted occurrence went
+  // ghost, and once nothing wore it any more the machine-solid pass could
+  // never restore it, so every later selection looked hidden. Lift it the
+  // same way the selection is lifted, and put it back on top of the retinted
+  // originals afterwards.
+  const keepSweep = (state.visibleSelection || []).slice();
+  const keepSweepActive = !!state.selectVisibleActive;
+  for (const p of keepSweep) {
+    for (const m of p.meshes) {
+      if (m.userData._mat) { m.material = m.userData._mat; delete m.userData._mat; }
+    }
+  }
+  state.visibleSelection = [];
+  state.selectVisibleActive = false;
   state.root.traverse((o) => {
     if (!o.isMesh) return;
     const mats = Array.isArray(o.material) ? o.material : [o.material];
     for (const m of mats) {
       if (!m) continue;
+      // The highlight look is never a machine surface; belt and braces.
+      if (m === HIGHLIGHT || m === HIGHLIGHT_TRANSPARENT) continue;
       if (!m.userData._machineSurface) {
         m.userData._machineSurface = {
           transparent: !!m.transparent,
@@ -491,8 +552,18 @@ function applyMachineTransparency(enabled) {
       m.needsUpdate = true;
     }
   });
-  state.machineTransparent = enabled;
   if (keepSelected) selectPart(keepSelected, { fromTree: true });
+  // Re-paint the sweep on top of the retinted originals (the re-selected
+  // part already wears its highlight and keeps its own stash).
+  for (const p of keepSweep) {
+    for (const m of p.meshes) {
+      if (m.userData._mat) continue;
+      m.userData._mat = m.material;
+      m.material = highlightFor(p);
+    }
+  }
+  state.visibleSelection = keepSweep;
+  state.selectVisibleActive = keepSweepActive;
   syncDockState();
   updateSelectionUI();
   requestRender();
@@ -501,6 +572,42 @@ function applyMachineTransparency(enabled) {
 function toggleMachineTransparency() {
   applyMachineTransparency(!state.machineTransparent);
   toast(state.machineTransparent ? 'Machine transparent' : 'Machine view restored');
+}
+
+/**
+ * Show Machine: ghost the whole machine around whatever is selected, keeping
+ * the selected part(s) solid and highlighted. Needs a selection to start and
+ * lets go by itself once the selection is gone - a ghosted machine with
+ * nothing in it is never left behind. Switching it on also reveals every
+ * hidden / isolated part, because "show machine" means the whole machine.
+ * It never touches the Machine pill's flag: the two are independent modes
+ * that happen to share the ghost pass.
+ */
+function setShowMachine(on, { quiet = false } = {}) {
+  on = !!on;
+  if (on === state.showMachine) return;
+  if (on && !hasSelection()) { toast('Select a part first'); return; }
+  state.showMachine = on;
+  if (on) revealAllParts();
+  applyGhostPass(ghostWanted());
+  if (!quiet) toast(on ? 'Show in Machine on' : 'Show in Machine off');
+}
+
+function toggleShowMachine() {
+  if (!state.showMachine && !hasSelection()) { toast('Select a part first'); return; }
+  setShowMachine(!state.showMachine);
+}
+
+// The "selection gone -> mode off" rule, deferred one tick: a selection that
+// is merely being REPLACED (selectPart clears the old part before it sets the
+// new one, and ending a sweep does the same) must never read as "cleared".
+let showMachineGuard = 0;
+function guardShowMachine() {
+  if (!state.showMachine || showMachineGuard) return;
+  showMachineGuard = setTimeout(() => {
+    showMachineGuard = 0;
+    if (state.showMachine && !hasSelection()) setShowMachine(false, { quiet: true });
+  }, 0);
 }
 
 /*
@@ -525,7 +632,16 @@ function transparentVariant(mat) {
   twin.transparent = true;
   twin.opacity = PART_TRANSPARENT_OPACITY;
   twin.depthWrite = false;
-  twin.userData = { ...twin.userData, _solidSource: solid };
+  // clone() copies userData wholesale, so the twin would inherit the SOLID's
+  // machine-transparency baseline - and applyMachineTransparency would then
+  // "restore" this twin to opaque the moment the machine goes solid again,
+  // leaving a part that is still listed as transparent but no longer looks it.
+  // The twin's own baseline is its see-through identity.
+  twin.userData = {
+    ...twin.userData,
+    _solidSource: solid,
+    _machineSurface: { transparent: true, opacity: PART_TRANSPARENT_OPACITY, depthWrite: false },
+  };
   solid.userData._transparentTwin = twin;
   return twin;
 }
@@ -556,15 +672,41 @@ function setPartTransparency(part, enabled) {
   requestRender();
 }
 
+/**
+ * Enters or leaves part-transparency MODE.
+ *
+ * The portal's GLB viewer treats this as a sticky mode rather than a per-part
+ * action (ModelViewer.js: `partTransparencyToggle` is state, and an effect
+ * re-applies it on every selection change), so this mirrors that: turn it on
+ * once and every part you pick from then on goes see-through and accumulates.
+ *
+ * Turning it off is the ONLY thing that puts them back - deliberately, because
+ * the point of accumulating is to compare several parts at once, and having any
+ * single one of them silently revert would defeat that.
+ */
+function setPartTransparencyMode(on) {
+  state.partTransparentMode = !!on;
+  if (state.partTransparentMode) {
+    // Entering with something already picked applies to it immediately, so the
+    // mode never looks inert for the one part the user was already looking at.
+    if (state.selected) setPartTransparency(state.selected, true);
+    toast('Part transparency on - parts you select turn see-through');
+  } else {
+    const total = state.transparentParts.size;
+    clearAllPartTransparency();
+    toast(total ? `Part transparency off (${total} part${total === 1 ? '' : 's'} solid)` : 'Part transparency off');
+  }
+  syncDockState();
+  requestRender();
+}
+
 function togglePartTransparency() {
-  const part = state.selected;
-  if (!part) { toast('Select a part first'); return; }
-  const next = !isPartTransparent(part);
-  setPartTransparency(part, next);
-  const total = state.transparentParts.size;
-  toast(next
-    ? `${part.name} transparent (${total} part${total === 1 ? '' : 's'})`
-    : `${part.name} solid`);
+  // A selection is only needed to START: without one the mode has nothing to
+  // act on and the chip stays disabled. Once on, the chip stays live whatever
+  // the selection is, so clearing the selection can never trap the user inside
+  // the mode with no way out.
+  if (!state.partTransparentMode && !state.selected) { toast('Select a part first'); return; }
+  setPartTransparencyMode(!state.partTransparentMode);
 }
 
 /** Used when a model is torn down, and by "Show all" as a full reset. */
@@ -888,7 +1030,11 @@ function resetView(animate = true) {
   clearSelection();
   markSelectedRow(null);
   showAll();                     // select-visible, isolate, part transparency, hidden parts
-  if (state.machineTransparent) applyMachineTransparency(false);
+  // Home is the full reset: both ghost modes go, in one pass.
+  const hadGhost = ghostWanted();
+  state.machineTransparent = false;
+  state.showMachine = false;
+  if (hadGhost) applyGhostPass(false);
 
   updateSelectionUI();
   goHome(animate);
@@ -926,7 +1072,7 @@ HIGHLIGHT_TRANSPARENT.opacity = PART_TRANSPARENT_OPACITY;
 HIGHLIGHT_TRANSPARENT.depthWrite = false;
 
 function highlightFor(part) {
-  return state.transparentParts.has(part) ? HIGHLIGHT_TRANSPARENT : HIGHLIGHT;
+  return isPartTransparent(part) ? HIGHLIGHT_TRANSPARENT : HIGHLIGHT;
 }
 
 function selectPart(part, { focus = false, fromTree = false } = {}) {
@@ -945,6 +1091,12 @@ function selectPart(part, { focus = false, fromTree = false } = {}) {
       m.userData._mat = m.material;
       m.material = highlightFor(part);
     }
+    // The mode's entire behaviour lives on this line: picking a part while it
+    // is on is what turns that part see-through. It must run AFTER the loop
+    // above, because setPartTransparency rewrites both the live material and
+    // the `_mat` stash for the SELECTED part - which is what lets the choice
+    // survive moving on to the next part.
+    if (state.partTransparentMode) setPartTransparency(part, true);
     if (focus) fitTo(new THREE.Box3().setFromObject(part.object));
     if (!fromTree) revealInTree(part);
   }
@@ -1196,19 +1348,32 @@ function applyFilter(query) {
 
 /* -------------------------------------------------------------- visibility */
 
-function showAll() {
-  // The sweep highlights "the parts visible right now", so any change to what is
-  // visible invalidates it.
-  if (state.selectVisibleActive) setSelectVisible(false);
+/**
+ * Makes every part visible again - isolate and hidden parts released - WITHOUT
+ * touching the selection, the sweep or any mode. Show Machine uses this to
+ * reveal the machine around the selection it is keeping.
+ */
+function revealAllParts() {
+  if (!state.root) return;
   state.isolated = false;
   state.isolateBackup = null;
-  clearAllPartTransparency();
   state.root.traverse((o) => { if (o !== grid) o.visible = true; });
   for (const p of state.parts) p.visible = true;
   $$('.trow').forEach((r) => r.classList.remove('dimmed'));
   $$('.teye').forEach((e) => { e.textContent = '◉'; });
-  syncDockState();
   window.dispatchEvent(new CustomEvent('istp2html:visibility', { detail: { part: null, visible: true } }));
+}
+
+function showAll() {
+  // The sweep highlights "the parts visible right now", so any change to what is
+  // visible invalidates it.
+  if (state.selectVisibleActive) setSelectVisible(false);
+  // "Show everything" is the full reset, so it leaves the mode too - otherwise
+  // the next part clicked would silently go transparent again.
+  state.partTransparentMode = false;
+  clearAllPartTransparency();
+  revealAllParts();
+  syncDockState();
   requestRender();
 }
 
@@ -1411,6 +1576,102 @@ function addMeasurePoint(pt) {
 /* -------------------------------------------------------------------- edges */
 
 /**
+ * Confirm/progress UI for buildEdges(). Ships inline in new conversions
+ * (template.html / template_single_file.html); built here on demand so an
+ * already-converted page (this file patched into it without reconverting)
+ * gets the same UI - the self-installing pattern the Order Parts overlay
+ * uses for its Show Machine pill.
+ */
+function ensureEdgeConfirmEl() {
+  let el = $('#edge-confirm');
+  if (el) return el;
+  el = document.createElement('div');
+  el.id = 'edge-confirm';
+  el.className = 'hidden';
+  el.setAttribute('role', 'alertdialog');
+  el.setAttribute('aria-modal', 'true');
+  el.setAttribute('aria-labelledby', 'edge-confirm-title');
+  el.innerHTML =
+    '<div class="edge-confirm-card">' +
+      '<h3 id="edge-confirm-title">Build the edge overlay?</h3>' +
+      '<p id="edge-confirm-tris"></p>' +
+      '<p id="edge-confirm-body"></p>' +
+      '<div class="edge-confirm-actions">' +
+        '<button type="button" class="edge-confirm-cancel" id="edge-confirm-cancel">Cancel</button>' +
+        '<button type="button" class="edge-confirm-ok" id="edge-confirm-ok">Build it now</button>' +
+      '</div>' +
+    '</div>';
+  (document.getElementById('stage') || document.getElementById('viewer') || document.body).appendChild(el);
+  return el;
+}
+
+function ensureEdgeProgressEl() {
+  let el = $('#edge-progress');
+  if (el) return el;
+  el = document.createElement('div');
+  el.id = 'edge-progress';
+  el.className = 'hidden';
+  el.setAttribute('role', 'status');
+  el.setAttribute('aria-live', 'polite');
+  el.innerHTML =
+    '<span class="edge-progress-label">Building edges&hellip;</span>' +
+    '<div class="edge-progress-track"><div class="edge-progress-fill" id="edge-progress-fill"></div></div>' +
+    '<span class="edge-progress-pct" id="edge-progress-pct">0%</span>';
+  const dock = document.getElementById('dock-stack');
+  const bottomDock = document.getElementById('bottom-dock');
+  if (dock && bottomDock) dock.insertBefore(el, bottomDock);
+  else if (dock) dock.appendChild(el);
+  else (document.getElementById('stage') || document.body).appendChild(el);
+  return el;
+}
+
+/** Resolves true (build it) / false (cancel or backdrop click). */
+function showEdgeConfirm(tris) {
+  const el = ensureEdgeConfirmEl();
+  const est = Math.ceil(tris / 1_500_000);
+  const trisEl = $('#edge-confirm-tris');
+  const bodyEl = $('#edge-confirm-body');
+  if (trisEl) trisEl.textContent = `This model has ${fmtInt(tris)} triangles.`;
+  if (bodyEl) {
+    bodyEl.textContent =
+      `Building the edge overlay may take around ${est}–${est * 4} seconds ` +
+      `and will noticeably increase memory use.`;
+  }
+  el.classList.remove('hidden');
+  return new Promise((resolve) => {
+    const okBtn = document.getElementById('edge-confirm-ok');
+    const cancelBtn = document.getElementById('edge-confirm-cancel');
+    const finish = (result) => {
+      el.classList.add('hidden');
+      okBtn.removeEventListener('click', onOk);
+      cancelBtn.removeEventListener('click', onCancel);
+      el.removeEventListener('click', onBackdrop);
+      resolve(result);
+    };
+    const onOk = () => finish(true);
+    const onCancel = () => finish(false);
+    // Clicking the dimmed backdrop (not the card itself) counts as Cancel.
+    const onBackdrop = (e) => { if (e.target === el) finish(false); };
+    okBtn.addEventListener('click', onOk);
+    cancelBtn.addEventListener('click', onCancel);
+    el.addEventListener('click', onBackdrop);
+  });
+}
+
+function showEdgeProgress(pct) {
+  ensureEdgeProgressEl().classList.remove('hidden');
+  const fill = document.getElementById('edge-progress-fill');
+  const label = document.getElementById('edge-progress-pct');
+  if (fill) fill.style.width = pct + '%';
+  if (label) label.textContent = pct + '%';
+}
+
+function hideEdgeProgress() {
+  const el = $('#edge-progress');
+  if (el) el.classList.add('hidden');
+}
+
+/**
  * Build crease edges once per *unique* geometry, then attach a LineSegments to
  * every node that uses it.  On a 5,000-placement assembly built from 725 unique
  * parts this is ~7x less work than doing it per placement.
@@ -1427,14 +1688,11 @@ async function buildEdges(thresholdDeg = 28) {
 
   // Crease extraction walks every triangle and allocates a line segment per
   // kept edge, so on a very heavy model it is worth a lot of seconds and a lot
-  // of memory. Make that the user's call rather than silently freezing the tab.
+  // of memory. Make that the user's call rather than silently freezing the tab -
+  // via the app's own dialog, not a native confirm() (which, embedded in an
+  // iframe, carries a "localhost:5000 says" browser chrome line).
   if (state.stats.tris > 3_000_000) {
-    const est = Math.ceil(state.stats.tris / 1_500_000);
-    const ok = window.confirm(
-      `This model has ${fmtInt(state.stats.tris)} triangles.\n\n` +
-      `Building the edge overlay may take around ${est}–${est * 4} seconds ` +
-      `and will noticeably increase memory use.\n\nBuild it now?`
-    );
+    const ok = await showEdgeConfirm(state.stats.tris);
     if (!ok) return;
   }
 
@@ -1470,6 +1728,9 @@ async function buildEdges(thresholdDeg = 28) {
     if (edgeGeo.attributes.position && edgeGeo.attributes.position.count) {
       for (const u of users) {
         const seg = new THREE.LineSegments(edgeGeo, mat);
+        // Remembered so the segment can follow its mesh's visibility
+        // (syncEdgeVisibility): the group sits beside the model, not in it.
+        seg.userData.sourceMesh = u;
         seg.applyMatrix4(u.matrixWorld);
         seg.frustumCulled = true;
         group.add(seg);
@@ -1479,11 +1740,12 @@ async function buildEdges(thresholdDeg = 28) {
     }
     done++;
     if (done % 24 === 0) {
-      toast(`Building edges ${Math.round((done / total) * 100)}%`, 600);
+      showEdgeProgress(Math.round((done / total) * 100));
       await new Promise((r) => setTimeout(r, 0));
     }
   }
 
+  hideEdgeProgress();
   scene.add(group);
   state.edgeGroup = group;
   state.edgesBuilt = true;
@@ -1493,6 +1755,23 @@ async function buildEdges(thresholdDeg = 28) {
   syncShadedWireUI();
   requestRender();
   toast(`Edges built in ${((performance.now() - t0) / 1000).toFixed(1)}s`);
+}
+
+/**
+ * The edge overlay lives in its own scene-level group (one LineSegments per
+ * mesh), so nothing that hides a part - isolate, the tree's eye icons, the
+ * Order Parts overlay's own isolate - ever reached it: inside an isolate the
+ * whole machine kept drawing as wireframe, and with Machine mode ghosting the
+ * surfaces those stray edges were all you saw. Each segment remembers its
+ * mesh, and before every frame it simply follows that mesh's drawn state.
+ */
+function syncEdgeVisibility() {
+  const g = state.edgeGroup;
+  if (!g || !g.visible) return;
+  for (const seg of g.children) {
+    const src = seg.userData.sourceMesh;
+    if (src) seg.visible = isDrawn(src);
+  }
 }
 
 /* --------------------------------------------------------------------- HUD */
@@ -1528,6 +1807,7 @@ function updateSelectionUI() {
   applyIsolateState();
   syncDockState();
   const el = $('#sel-info');
+  if (!el) return;
   if (!p) {
     el.innerHTML = '<span style="color:var(--text-faint)">No selection &mdash; click a part</span>';
     return;
@@ -1551,10 +1831,12 @@ function escapeHtml(s) {
 }
 
 function updateModelInfo() {
+  const el = $('#model-info');
+  if (!el) return;
   const m = CFG.meta || {};
   const st = m.stats || {};
   const src = m.source || {};
-  $('#model-info').innerHTML =
+  el.innerHTML =
     `<dl class="kv">` +
     `<dt>Source</dt><dd>${escapeHtml(src.file || CFG.title || '')}</dd>` +
     `<dt>CAD system</dt><dd>${escapeHtml(src.originatingSystem || 'unknown')}</dd>` +
@@ -1628,6 +1910,7 @@ function tick() {
   if (!dirty) return;
   state.needsRender = false;
 
+  syncEdgeVisibility();
   renderer.info.reset();
   renderer.render(scene, camera);
   state.lastCalls = renderer.info.render.calls;
@@ -1722,7 +2005,7 @@ window.addEventListener('keydown', (e) => {
 function togglePanel(sel) {
   const el = $(sel);
   const wasHidden = el.classList.contains('hidden');
-  $$('.panel').forEach((p) => { if (p !== el && p.id !== 'panel-info') p.classList.add('hidden'); });
+  $$('.panel').forEach((p) => { if (p !== el) p.classList.add('hidden'); });
   el.classList.toggle('hidden', !wasHidden);
   return wasHidden;
 }
@@ -1928,6 +2211,14 @@ function setSelectVisible(active) {
   updateSelectionUI();
   syncDockState();
   requestRender();
+  // The Order Parts overlay builds its "Multiple Parts Selected" list from this.
+  // An EVENT rather than a poll on the flag, because that overlay also drives
+  // `visibleSelection` itself to paint occurrence highlights - watching the
+  // state could not tell the two apart, and the list would pop open on a tree
+  // click. Only the dock sweep announces itself here.
+  window.dispatchEvent(new CustomEvent('istp2html:selectvisible', {
+    detail: { active, count: state.visibleSelection.length },
+  }));
   if (active) toast(`${state.visibleSelection.length} visible part(s) selected`);
 }
 
@@ -2005,7 +2296,6 @@ function toggleMoreMenu() {
 const MORE_ACTIONS = {
   part: togglePartTransparency,
   isolate: isolateSelected,
-  info: () => $('#panel-info').classList.toggle('hidden'),
   settings: () => togglePanel('#panel-settings'),
   section: () => {
     const shown = togglePanel('#panel-section');
@@ -2053,18 +2343,43 @@ function syncDockState() {
   }
   setDockIcon('#btn-theme-chip', state.machineTransparent ? ICONS.dropTransparent : ICONS.dropSolid);
 
-  // The chip reports the SELECTED part's own transparency, not a global flag -
-  // other parts may well be transparent at the same time.
-  const selTransparent = isPartTransparent(state.selected);
+  // Show Machine: selection-gated like the Part chip, lit while on. Stays live
+  // while on so the selection vanishing can never trap the user in it; the
+  // guard then switches it off (deferred) and this re-render disables it.
+  const canShow = hasSelection();
+  const showM = $('#btn-show-machine');
+  if (showM) {
+    // Not merely disabled without a selection - not SHOWN at all: the pill
+    // appears once there is a part to show the machine around, and stays on
+    // screen while the mode is on so there is always a way back out.
+    // Clearing the inline value hands display back to the stylesheet (the
+    // dock-desktop-only media query owns it at narrow widths).
+    const display = (state.showMachine || canShow) ? '' : 'none';
+    if (showM.style.display !== display) showM.style.display = display;
+    showM.disabled = !state.showMachine && !canShow;
+    showM.classList.toggle('active', state.showMachine);
+    showM.title = state.showMachine
+      ? 'Hide Machine (keep the selection)'
+      : (canShow ? 'Show the whole machine ghosted around the selection' : 'Show in Machine requires a selected part');
+  }
+  if (state.showMachine && !canShow) guardShowMachine();
+
+  // The chip reports the MODE, not the selected part's own state: while the
+  // mode is on several parts are transparent at once, and the selection is
+  // merely the most recent of them.
+  const partMode = state.partTransparentMode;
+  const partCount = state.transparentParts.size;
   const part = $('#btn-part-chip');
   if (part) {
-    part.disabled = !sel;
-    part.classList.toggle('active', selTransparent);
-    part.title = !sel
-      ? 'Part transparency requires a selected part'
-      : (selTransparent ? 'Switch selected part to Solid' : 'Switch selected part to Transparent');
+    // Live whenever the mode is on, whatever the selection - the way out of a
+    // mode must never depend on still having something selected.
+    part.disabled = !partMode && !sel;
+    part.classList.toggle('active', partMode);
+    part.title = partMode
+      ? `Turn off part transparency (${partCount} part${partCount === 1 ? '' : 's'} transparent)`
+      : (sel ? 'Make each part you select transparent' : 'Part transparency requires a selected part');
   }
-  setDockIcon('#btn-part-chip', selTransparent ? ICONS.dropTransparent : ICONS.dropSolid);
+  setDockIcon('#btn-part-chip', partMode ? ICONS.dropTransparent : ICONS.dropSolid);
 
   const iso = $('#btn-isolate');
   if (iso) {
@@ -2089,7 +2404,7 @@ function syncDockState() {
   // state included - otherwise the action a phone user gets is the one the
   // toolbar refuses to give a desktop user.
   const menuPart = $('#dock-more-menu [data-action="part"]');
-  if (menuPart) { menuPart.disabled = !sel; menuPart.classList.toggle('active', selTransparent); }
+  if (menuPart) { menuPart.disabled = !partMode && !sel; menuPart.classList.toggle('active', partMode); }
   const menuIso = $('#dock-more-menu [data-action="isolate"]');
   if (menuIso) { menuIso.disabled = !sel; menuIso.classList.toggle('active', state.isolated); }
 
@@ -2122,6 +2437,7 @@ function wireUI() {
   $('#dock-explode')?.addEventListener('input', (e) => setExplodeAmount(parseFloat(e.target.value)));
   $('#btn-zoom-selected')?.addEventListener('click', zoomToSelectionToggle);
   $('#btn-theme-chip')?.addEventListener('click', toggleMachineTransparency);
+  $('#btn-show-machine')?.addEventListener('click', toggleShowMachine);
   $('#btn-part-chip')?.addEventListener('click', togglePartTransparency);
   $('#btn-isolate')?.addEventListener('click', isolateSelected);
   $('#btn-select-visible')?.addEventListener('click', toggleSelectVisible);
@@ -2161,7 +2477,6 @@ function wireUI() {
     if (shown) { $('#clip-on').checked = true; state.clip.enabled = true; updateClipping(); }
   });
   $('#btn-help').addEventListener('click', () => togglePanel('#panel-help'));
-  $('#btn-info').addEventListener('click', () => $('#panel-info').classList.toggle('hidden'));
   $('#btn-snap')?.addEventListener('click', snapshot);
 
   $$('#viewcube button').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
@@ -2210,6 +2525,9 @@ function wireUI() {
     renderer.toneMappingExposure = v;
     requestRender();
   });
+  // HTML slider is the source of truth (templates default to 0). Apply it now
+  // so a stale renderer.toneMappingExposure init cannot override the markup.
+  $('#opt-exposure')?.dispatchEvent(new Event('input'));
   // Frame-coalescing for the drag lives in queueExplode, shared with the dock slider.
   $('#opt-explode').addEventListener('input', (e) => {
     const v = parseFloat(e.target.value);
@@ -2287,6 +2605,8 @@ window.iSTP2HTML = {
   controls,
   requestRender,
   selectPart,
+  setShowMachine,
+  toggleShowMachine,
   fitTo,
   setView,
   setShading,
@@ -2325,7 +2645,7 @@ async function boot() {
     await loadModel();
     if (state.shading !== 'shaded') setShading(state.shading);
     if (state.shadedWire) await setShadedWire(true);
-    if (state.machineTransparent) applyMachineTransparency(true);
+    reapplyGhost();
     if (state.tone !== 'neutral') setToneMapping(state.tone);
   } catch (err) {
     failLoad(err);
