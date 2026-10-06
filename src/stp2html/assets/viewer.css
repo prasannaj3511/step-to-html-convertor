@@ -646,11 +646,11 @@ dl.kv dd { margin: 0; font-family: var(--mono); overflow-wrap: anywhere; }
   display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px;
 }
 #edge-confirm .edge-confirm-cancel {
-  background: none; border: 0; color: #1D99D6; font-family: inherit;
+  background: none; border: 0; color: var(--brand); font-family: inherit;
   font-size: 13px; font-weight: 600; cursor: pointer; padding: 8px 12px;
 }
 #edge-confirm .edge-confirm-ok {
-  background: #1D99D6; border: 0; border-radius: 8px; color: #fff;
+  background: var(--brand); border: 0; border-radius: 8px; color: #fff;
   font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
   padding: 9px 16px;
 }
@@ -674,6 +674,21 @@ dl.kv dd { margin: 0; font-family: var(--mono); overflow-wrap: anywhere; }
   z-index: 40; white-space: nowrap;
 }
 #toast.show { opacity: 1; }
+
+/* Hover part-number tip (follows cursor; yellow mesh preview stays separate). */
+#hover-tip {
+  position: fixed; left: 0; top: 0; z-index: 60; pointer-events: none;
+  max-width: 320px; padding: 8px 10px; border-radius: 8px;
+  background: #ffffff; border: 1px solid #e6e8ec;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.14);
+  font-size: 12px; font-weight: 700; color: #1a1a1a;
+  display: none; will-change: transform;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#hover-tip.visible { display: block; }
+[data-theme="dark"] #hover-tip {
+  background: var(--bg-elev); border-color: var(--border); color: var(--text);
+}
 
 /* ------------------------------------------------------------------ misc */
 

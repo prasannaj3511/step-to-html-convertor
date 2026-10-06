@@ -15,14 +15,9 @@
   <div id="topbar">
     <div class="brand"><span id="brand-title">{{TITLE_HTML}}</span></div>
 
-    <div class="tb-group hidden" id="model-switch">
-      <label for="model-select" class="tb-label" style="color:var(--text-faint)">Model</label>
-      <select id="model-select" title="Switch to another converted model"></select>
-    </div>
-
     <div class="tb-sep"></div>
     <div class="tb-group">
-      <button class="tb" id="btn-sidebar" title="Toggle model tree (B)">&#9776;<span class="tb-label"> Tree</span></button>
+      <button class="tb" id="btn-sidebar" title="Close menu (B)">&#9776;<span class="tb-label"> Menu</span></button>
       <button class="tb" id="btn-hide" title="Hide selected part (H)">Hide</button>
       <button class="tb" id="btn-showall" title="Show everything (R)">Show all</button>
     </div>
@@ -63,10 +58,10 @@
         a second to appear - long enough that the button reads as unlabelled.
       -->
       <div id="menu-toggle-wrap">
-        <button class="dock-btn active" id="btn-menu-toggle" aria-label="Close Menu" aria-expanded="true">
+        <button class="dock-btn active" id="btn-menu-toggle" aria-label="Close menu" aria-expanded="true">
           <span class="dock-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 18h13v-2H3zm0-5h10v-2H3zm0-7v2h13V6zm18 9.59L17.42 12 21 8.41 19.59 7l-5 5 5 5z"/></svg></span>
         </button>
-        <span class="menu-toggle-tip" id="menu-toggle-tip">Close Menu</span>
+        <span class="menu-toggle-tip" id="menu-toggle-tip">Close menu</span>
       </div>
 
 
@@ -229,7 +224,7 @@
           </button>
           <button class="dock-menu-item" role="menuitem" data-action="tree">
             <span class="dock-menu-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5h16v2H4zm0 6h16v2H4zm0 6h16v2H4z"/></svg></span>
-            <span>Model tree</span>
+            <span>Close menu</span>
           </button>
         </div>
       </div>
@@ -261,8 +256,8 @@
           <input type="range" id="opt-rough" min="0.05" max="1" step="0.01" value="0.52">
           <span class="val" id="opt-rough-val">0.52</span></div>
         <div class="row"><label for="opt-exposure">Exposure</label>
-          <input type="range" id="opt-exposure" min="0" max="2.5" step="0.01" value="1">
-          <span class="val" id="opt-exposure-val">0.50</span></div>
+          <input type="range" id="opt-exposure" min="0" max="2.5" step="0.01" value="0.15">
+          <span class="val" id="opt-exposure-val">0.15</span></div>
         <div class="row"><label for="opt-fov">Field of view</label>
           <input type="range" id="opt-fov" min="15" max="80" step="1" value="45">
           <span class="val" id="opt-fov-val">45</span></div>
@@ -289,7 +284,7 @@
           <tr><td><kbd>RMB</kbd> drag</td><td>Pan</td></tr>
           <tr><td>Wheel</td><td>Zoom</td></tr>
           <tr><td><kbd>Click</kbd></td><td>Select part</td></tr>
-          <tr><td>Hover</td><td>Preview part (yellow)</td></tr>
+          <tr><td>Hover</td><td>Yellow preview + part number tooltip</td></tr>
           <tr><td><kbd>Dbl-click</kbd></td><td>Hide part</td></tr>
           <tr><td><kbd>A</kbd></td><td>Fit all</td></tr>
           <tr><td><kbd>F</kbd></td><td>Fit selection</td></tr>

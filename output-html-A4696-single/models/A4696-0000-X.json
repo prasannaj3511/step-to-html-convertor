@@ -1,0 +1,54 @@
+{
+  "generator": "iSTP2HTML 1.0.0",
+  "generatedAt": "2026-09-30T12:35:49",
+  "source": {
+    "file": "A4696-0000-X.stp",
+    "bytes": 299009525,
+    "schema": "AUTOMOTIVE_DESIGN {1 0 10303 214 3 1 1}",
+    "originatingSystem": "Solid Edge",
+    "preprocessor": "ST-DEVELOPER v20",
+    "timestamp": "2026-09-28T14:15:22+05:30",
+    "name": "A4696-0000-X"
+  },
+  "model": {
+    "file": "models/A4696-0000-X.glb",
+    "bytes": 15633892,
+    "units": "MM",
+    "unitScale": 1000.0,
+    "upAxis": "Y",
+    "compressed": true
+  },
+  "stats": {
+    "uniqueParts": 1170,
+    "instances": 5043,
+    "placements": 5036,
+    "assemblies": 8,
+    "roots": 1,
+    "faces": 102950,
+    "uniqueTriangles": 3129130,
+    "renderedTriangles": 11212047,
+    "uniqueVertices": 2959804,
+    "meshFailures": 0,
+    "quality": "high",
+    "conversionSeconds": 385.4,
+    "rawGlbBytes": 92134632,
+    "finalGlbBytes": 15633892,
+    "hadAuthoredColors": true
+  },
+  "bbox": {
+    "min": [
+      -1e+100,
+      -1e+100,
+      -1e+100
+    ],
+    "max": [
+      1e+100,
+      1e+100,
+      1e+100
+    ]
+  },
+  "environment": {
+    "python": "3.14.7",
+    "platform": "Windows-11-10.0.26200-SP0"
+  }
+}

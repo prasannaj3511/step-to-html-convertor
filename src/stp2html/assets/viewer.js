@@ -109,7 +109,7 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 // designer painted pure red renders noticeably off. Neutral keeps assigned
 // colours close to their nominal value while still taming highlights.
 renderer.toneMapping = THREE.NeutralToneMapping;
-renderer.toneMappingExposure = 0.5;
+renderer.toneMappingExposure = 0.15;
 renderer.localClippingEnabled = true;
 renderer.info.autoReset = false;
 
@@ -743,13 +743,33 @@ function clearAllPartTransparency() {
  * unnamed so the *node* name (the real CAD part name) wins, which means any name
  * of this shape is generated plumbing rather than something to show the user.
  *
+ * Instanced clones of unnamed nodes become bare `_instance_9` — also not a
+ * part name. Prefer the nearest ancestor with a real CAD label.
+ *
  * Getting the multi-primitive form wrong is what turns one per-face-coloured
  * part into six bogus entries in the model tree.
  */
 const AUTO_NAME_RE = /^(?:mesh|node|primitive)_\d+(?:_\d+)*(?:_instance_\d+)?$/;
 
+/** three.js appends this to cloned scene-graph nodes; strip before display. */
+function stripInstanceSuffix(name) {
+  return String(name || '').replace(/_instance_\d+$/i, '').trim();
+}
+
 function isMeaningfulName(name) {
-  return !!name && name.trim().length > 0 && !AUTO_NAME_RE.test(name);
+  const raw = String(name || '').trim();
+  if (!raw) return false;
+  if (AUTO_NAME_RE.test(raw)) return false;
+  const cleaned = stripInstanceSuffix(raw);
+  // Bare `_instance_9` (or auto-name + instance) is loader plumbing.
+  if (!cleaned || AUTO_NAME_RE.test(cleaned)) return false;
+  return true;
+}
+
+/** CAD / catalog label for a node, with instance suffix removed. */
+function displayNameOf(obj) {
+  const cleaned = stripInstanceSuffix(obj && obj.name);
+  return isMeaningfulName(cleaned) ? cleaned : '';
 }
 
 /**
@@ -851,7 +871,7 @@ function collectParts(root) {
     const mat = Array.isArray(meshes[0].material) ? meshes[0].material[0] : meshes[0].material;
     const part = {
       id: id++,
-      name: owner.name || `Part ${id}`,
+      name: displayNameOf(owner) || stripInstanceSuffix(owner.name) || `Part ${id}`,
       object: owner,
       meshes,
       tris: Math.round(t),
@@ -886,6 +906,8 @@ function frameBounds() {
   for (const l of [keyLight, fillLight, rimLight]) l.target.position.copy(state.center);
   scene.add(keyLight.target, fillLight.target, rimLight.target);
 
+  // Default load: 3/4 side elevation of a Z-up CAD machine (long axis
+  // left-right on screen). Home captures this pose immediately after.
   setView('iso', false);
   state.homeView = {
     position: camera.position.clone(),
@@ -912,7 +934,8 @@ function buildGrid() {
 /* -------------------------------------------------------------- view setup */
 
 const VIEW_DIRS = {
-  iso: [1, 0.8, 1],
+  // 3/4 side elevation: look from +X so the long CAD-Y axis runs left-right.
+  iso: [1, 0.5, -0.22],
   front: [0, 0, 1],
   back: [0, 0, -1],
   left: [-1, 0, 0],
@@ -925,6 +948,7 @@ const _corner = new THREE.Vector3();
 const _right = new THREE.Vector3();
 const _up = new THREE.Vector3();
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
+const CAD_UP = new THREE.Vector3(0, 0, -1);
 
 /**
  * Exact camera distance needed to fit `box` when viewed along `dir`.
@@ -935,12 +959,12 @@ const WORLD_UP = new THREE.Vector3(0, 1, 0);
  * camera basis and solve for the distance that brings the worst one just inside
  * both the horizontal and vertical frustum planes.
  */
-function distanceToFit(box, dir, margin = 1.06) {
+function distanceToFit(box, dir, margin = 1.06, up = WORLD_UP) {
   const center = box.getCenter(new THREE.Vector3());
   const vTan = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
   const hTan = vTan * Math.max(camera.aspect, 1e-3);
 
-  _right.crossVectors(dir, WORLD_UP);
+  _right.crossVectors(dir, up);
   if (_right.lengthSq() < 1e-8) _right.set(1, 0, 0); // looking straight up/down
   _right.normalize();
   _up.crossVectors(_right, dir).normalize();
@@ -963,13 +987,16 @@ function distanceToFit(box, dir, margin = 1.06) {
 }
 
 function setView(name, animate = true) {
-  // Preset views are canonical - snap the up vector back to world Y so a prior
+  // Preset views are canonical - snap the up vector back so a prior
   // free-roll drag (TrackballControls allows rolling, unlike OrbitControls)
   // doesn't leave "Front"/"Top"/etc. looking tilted.
-  camera.up.copy(WORLD_UP);
+  // STEP assemblies are Z-up; iso is a 3/4 side elevation so the machine
+  // loads horizontally (long axis left-right), not as a top-down plan.
+  const up = name === 'iso' ? CAD_UP : WORLD_UP;
+  camera.up.copy(up);
   const dir = new THREE.Vector3(...(VIEW_DIRS[name] || VIEW_DIRS.iso)).normalize();
   const target = state.center.clone();
-  const pos = target.clone().addScaledVector(dir, distanceToFit(state.bounds, dir));
+  const pos = target.clone().addScaledVector(dir, distanceToFit(state.bounds, dir, 1.06, up));
   moveCamera(pos, target, animate);
 }
 
@@ -977,7 +1004,7 @@ function setView(name, animate = true) {
 function currentViewDir() {
   let dir = camera.position.clone().sub(controls.target);
   if (dir.lengthSq() < 1e-12) dir = camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(-1);
-  if (dir.lengthSq() < 1e-12) dir.set(1, 0.8, 1);
+  if (dir.lengthSq() < 1e-12) dir.set(1, 0.5, -0.22);
   return dir.normalize();
 }
 
@@ -1007,10 +1034,10 @@ function viewDirForPart(box) {
 
 function fitTo(box, animate = true, dirOverride = null) {
   if (!box || box.isEmpty()) return;
-  camera.up.copy(WORLD_UP);
+  const up = camera.up.clone();
   const center = box.getCenter(new THREE.Vector3());
   const dir = dirOverride ? dirOverride.clone().normalize() : currentViewDir();
-  moveCamera(center.clone().addScaledVector(dir, distanceToFit(box, dir)), center, animate);
+  moveCamera(center.clone().addScaledVector(dir, distanceToFit(box, dir, 1.06, up)), center, animate);
 }
 
 /** Frame a part and rotate to its outside face (Zoom-to-selected behaviour). */
@@ -1145,7 +1172,35 @@ function highlightFor(part) {
   return isPartTransparent(part) ? HIGHLIGHT_TRANSPARENT : HIGHLIGHT;
 }
 
+/**
+ * Portal Settings -> Additional Settings -> Highlight Color / Opacity. The
+ * materials are shared, so a part already selected changes on the spot. A null
+ * half leaves that half alone. The transparent twin follows the colour but keeps
+ * its own see-through level - that IS the part-transparency look. HOVER is
+ * untouched so the cursor preview stays distinct from the selection.
+ */
+function setHighlightColor(color, opacity) {
+  if (color) {
+    HIGHLIGHT.color.set(color);
+    // Same lit-from-within ratio the default blue ships with.
+    HIGHLIGHT.emissive.copy(HIGHLIGHT.color).multiplyScalar(0.3);
+    HIGHLIGHT_TRANSPARENT.color.copy(HIGHLIGHT.color);
+    HIGHLIGHT_TRANSPARENT.emissive.copy(HIGHLIGHT.emissive);
+  }
+  if (typeof opacity === 'number' && Number.isFinite(opacity)) {
+    const o = Math.min(1, Math.max(0, opacity));
+    HIGHLIGHT.transparent = o < 1;
+    HIGHLIGHT.opacity = o;
+    HIGHLIGHT.depthWrite = o >= 1;
+    HIGHLIGHT_TRANSPARENT.opacity = Math.min(PART_TRANSPARENT_OPACITY, o);
+  }
+  HIGHLIGHT.needsUpdate = true;
+  HIGHLIGHT_TRANSPARENT.needsUpdate = true;
+  requestRender();
+}
+
 function clearHover() {
+  hideHoverTip();
   const p = state.hovered;
   if (!p) return;
   for (const m of p.meshes || []) {
@@ -1157,8 +1212,86 @@ function clearHover() {
   state.hovered = null;
 }
 
-function setHover(part) {
-  if (part === state.hovered) return;
+/** Resolve a user-facing part label (never bare `_instance_N`). */
+function resolvePartLabel(part) {
+  if (!part) return '';
+  let name = stripInstanceSuffix(part.name);
+  if (isMeaningfulName(name)) return name;
+  // Older builds / odd graphs: climb from the picked node for a real CAD name.
+  let cur = part.object;
+  const stopAt = state.root;
+  while (cur && cur !== stopAt) {
+    name = displayNameOf(cur);
+    if (name) return name;
+    cur = cur.parent;
+  }
+  return '';
+}
+
+/** Part number / name shown next to the yellow hover preview. */
+function partHoverLabel(part) {
+  const name = resolvePartLabel(part);
+  if (!name) return '';
+  // Prefer a clean "Part #: …" when the node name looks like a catalog id.
+  if (/^[A-Za-z0-9][A-Za-z0-9._-]{1,}$/.test(name) && !/\s/.test(name)) {
+    return 'Part #: ' + name;
+  }
+  return name;
+}
+
+function ensureHoverTip() {
+  let el = $('#hover-tip');
+  if (el) return el;
+  el = document.createElement('div');
+  el.id = 'hover-tip';
+  el.setAttribute('role', 'status');
+  el.setAttribute('aria-live', 'polite');
+  el.setAttribute('aria-hidden', 'true');
+  (document.body || document.documentElement).appendChild(el);
+  return el;
+}
+
+function hideHoverTip() {
+  const el = $('#hover-tip');
+  if (!el) return;
+  el.classList.remove('visible');
+  el.setAttribute('aria-hidden', 'true');
+  el.textContent = '';
+}
+
+function placeHoverTip(clientX, clientY) {
+  const el = $('#hover-tip');
+  if (!el || !el.classList.contains('visible')) return;
+  const pad = 14;
+  const w = el.offsetWidth || 0;
+  const h = el.offsetHeight || 0;
+  let x = clientX + pad;
+  let y = clientY + pad;
+  if (x + w > window.innerWidth - 8) x = clientX - w - pad;
+  if (y + h > window.innerHeight - 8) y = clientY - h - pad;
+  el.style.transform = `translate(${Math.max(4, x)}px, ${Math.max(4, y)}px)`;
+}
+
+function showHoverTip(part, clientX, clientY) {
+  // Portal Order Parts overlay owns a richer tip (#op-hover-tip); skip ours to avoid doubles.
+  if ($('#op-hover-tip')) return;
+  const label = partHoverLabel(part);
+  if (!label) { hideHoverTip(); return; }
+  const el = ensureHoverTip();
+  el.textContent = label;
+  el.classList.add('visible');
+  el.setAttribute('aria-hidden', 'false');
+  placeHoverTip(clientX, clientY);
+}
+
+function setHover(part, pointer) {
+  const x = pointer && Number.isFinite(pointer.x) ? pointer.x : -1;
+  const y = pointer && Number.isFinite(pointer.y) ? pointer.y : -1;
+
+  if (part === state.hovered) {
+    if (part && x >= 0) placeHoverTip(x, y);
+    return;
+  }
   clearHover();
   // Selected / occurrence-painted parts already wear blue; yellow on top of
   // that would fight the stash and look like a flicker.
@@ -1171,6 +1304,7 @@ function setHover(part) {
     m.userData._hoverMat = m.material;
     m.material = HOVER;
   }
+  if (x >= 0) showHoverTip(part, x, y);
   requestRender();
 }
 
@@ -1333,8 +1467,9 @@ function renderTreeNode(obj, parentEl, depth, expanded) {
 
   const name = document.createElement('span');
   name.className = 'tname';
-  name.textContent = obj.name || '(unnamed)';
-  name.title = obj.name || '';
+  const label = displayNameOf(obj) || stripInstanceSuffix(obj.name) || '(unnamed)';
+  name.textContent = label;
+  name.title = label;
 
   row.append(caret, eye);
   if (part) {
@@ -2082,13 +2217,14 @@ canvas.addEventListener('pointermove', (e) => {
   if (hoverRaf) cancelAnimationFrame(hoverRaf);
   hoverRaf = requestAnimationFrame(() => {
     hoverRaf = 0;
-    setHover(partFromHit(pickAt(x, y)));
+    setHover(partFromHit(pickAt(x, y)), { x, y });
   });
 });
 
 canvas.addEventListener('pointerleave', () => {
   if (hoverRaf) { cancelAnimationFrame(hoverRaf); hoverRaf = 0; }
   if (state.hovered) { clearHover(); requestRender(); }
+  else hideHoverTip();
 });
 
 canvas.addEventListener('pointerup', (e) => {
@@ -2201,21 +2337,9 @@ function toggleMeasure() {
 }
 
 function buildModelSwitcher() {
-  const list = CFG.models || [];
-  if (list.length < 2) return;   // nothing to switch between
-
+  // Model file dropdown removed from the UI — one page, one model.
   const wrap = $('#model-switch');
-  const sel = $('#model-select');
-  sel.textContent = '';
-  list.forEach((m, i) => {
-    const opt = document.createElement('option');
-    opt.value = String(i);
-    opt.textContent = m.title || m.name;
-    if (i === state.modelIndex) opt.selected = true;
-    sel.appendChild(opt);
-  });
-  wrap.classList.remove('hidden');
-  sel.addEventListener('change', (e) => switchModel(parseInt(e.target.value, 10)));
+  if (wrap) wrap.classList.add('hidden');
 }
 
 /* ------------------------------------------------------------- bottom dock */
@@ -2603,17 +2727,23 @@ function syncDockState() {
   // Side-panel toggle: white with a blue glyph while the panel is shut, inverted
   // while it is open, so the button states the panel's state instead of merely
   // offering an action.
+  // The hamburger, the More-menu row and the topbar button all toggle the same
+  // drawer, so they share one wording that names the state you will GET.
+  const open = state.sidebarOpen;
+  const menuLabel = open ? 'Close menu' : 'Open menu';
   const menuBtn = $('#btn-menu-toggle');
   if (menuBtn) {
-    const open = state.sidebarOpen;
-    const label = open ? 'Close Menu' : 'Open Menu';
     menuBtn.classList.toggle('active', open);
-    menuBtn.setAttribute('aria-label', label);
+    menuBtn.setAttribute('aria-label', menuLabel);
     menuBtn.setAttribute('aria-expanded', String(open));
     setDockIcon('#btn-menu-toggle', open ? ICONS.menuOpen : ICONS.menuClosed);
     const tip = $('#menu-toggle-tip');
-    if (tip) tip.textContent = label;
+    if (tip) tip.textContent = menuLabel;
   }
+  const menuRowLabel = $('#dock-more-menu [data-action="tree"] span:not(.dock-menu-icon)');
+  if (menuRowLabel) menuRowLabel.textContent = menuLabel;
+  const sidebarBtn = $('#btn-sidebar');
+  if (sidebarBtn) sidebarBtn.title = `${menuLabel} (B)`;
 }
 
 function wireUI() {
@@ -2717,7 +2847,7 @@ function wireUI() {
     renderer.toneMappingExposure = v;
     requestRender();
   });
-  // HTML slider is the source of truth (templates default to 0). Apply it now
+  // HTML slider is the source of truth (templates default to 0.15). Apply it now
   // so a stale renderer.toneMappingExposure init cannot override the markup.
   $('#opt-exposure')?.dispatchEvent(new Event('input'));
   // Frame-coalescing for the drag lives in queueExplode, shared with the dock slider.
@@ -2799,6 +2929,7 @@ window.iSTP2HTML = {
   selectPart,
   setHover,
   clearHover,
+  setHighlightColor,
   setShowMachine,
   toggleShowMachine,
   fitTo,
