@@ -77,6 +77,10 @@ const state = {
                             // `selected` so isolate/part-transparency still mean one part
   hovered: null,            // part under the cursor (yellow preview; never the selected part)
   zoomedToSelection: false,
+  // Cleared when Zoom frames a part; set when the user orbits/pans/zooms the
+  // view. Lets Zoom re-frame the selection after a rotate instead of treating
+  // the next click as "zoom out to whole model".
+  cameraMovedSinceZoom: false,
   sidebarOpen: true,
   // Isolate is a MODE, not a one-shot: it follows the selection, and the backup
   // is what "everything was visible like this before isolating" looked like, so
@@ -166,14 +170,17 @@ const THEMES = {
 };
 
 function applyTheme(name) {
-  const t = THEMES[name] || THEMES.dark;
-  document.documentElement.dataset.theme = name;
+  // Settings no longer offers Dark; force light unless an explicit known theme is passed.
+  if (name !== 'light' && name !== 'dark') name = 'light';
+  if (name === 'dark') name = 'light';
+  const t = THEMES.light;
+  document.documentElement.dataset.theme = 'light';
   scene.background = new THREE.Color(t.bg);
   const themeSelect = $('#opt-theme');
-  if (themeSelect) themeSelect.value = name;
+  if (themeSelect) themeSelect.value = 'light';
   if (grid) {
     grid.material.color.setHex(t.grid1);
-    grid.material.opacity = name === 'light' ? 0.5 : 0.35;
+    grid.material.opacity = 0.5;
   }
   requestRender();
 }
@@ -572,25 +579,37 @@ function applyGhostPass(enabled) {
 }
 
 function toggleMachineTransparency() {
+  // Match Show Machine: leave isolate without undoing manual hides.
+  if (!state.machineTransparent && state.isolated) {
+    state.isolated = false;
+    applyIsolateState();
+    syncDockState();
+  }
   applyMachineTransparency(!state.machineTransparent);
   toast(state.machineTransparent ? 'Machine transparent' : 'Machine view restored');
 }
 
 /**
- * Show Machine: ghost the whole machine around whatever is selected, keeping
- * the selected part(s) solid and highlighted. Needs a selection to start and
+ * Show Machine: ghost the machine around whatever is selected, keeping the
+ * selected part(s) solid and highlighted. Needs a selection to start and
  * lets go by itself once the selection is gone - a ghosted machine with
- * nothing in it is never left behind. Switching it on also reveals every
- * hidden / isolated part, because "show machine" means the whole machine.
- * It never touches the Machine pill's flag: the two are independent modes
- * that happen to share the ghost pass.
+ * nothing in it is never left behind.
+ *
+ * Parts the user hid (double-click, Hide, tree eye) stay hidden. If Isolate
+ * was on, leave it by restoring the pre-isolate visibility map so those
+ * manual hides survive. It never touches the Machine pill's flag: the two
+ * are independent modes that happen to share the ghost pass.
  */
 function setShowMachine(on, { quiet = false } = {}) {
   on = !!on;
   if (on === state.showMachine) return;
   if (on && !hasSelection()) { toast('Select a part first'); return; }
   state.showMachine = on;
-  if (on) revealAllParts();
+  if (on && state.isolated) {
+    state.isolated = false;
+    applyIsolateState();
+    syncDockState();
+  }
   applyGhostPass(ghostWanted());
   if (!quiet) toast(on ? 'Show in Machine on' : 'Show in Machine off');
 }
@@ -954,17 +973,55 @@ function setView(name, animate = true) {
   moveCamera(pos, target, animate);
 }
 
-function fitTo(box, animate = true) {
+/** Current camera→target direction (fallback: iso). */
+function currentViewDir() {
+  let dir = camera.position.clone().sub(controls.target);
+  if (dir.lengthSq() < 1e-12) dir = camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(-1);
+  if (dir.lengthSq() < 1e-12) dir.set(1, 0.8, 1);
+  return dir.normalize();
+}
+
+/**
+ * Direction to approach a selected part from so Zoom after a 180° orbit
+ * swings around to the part's side of the machine instead of staying behind it.
+ *
+ * Prefer the outward ray from the assembly centre through the part centre.
+ * If the part sits near the centre (no clear "outside"), keep the current view.
+ */
+function viewDirForPart(box) {
+  const partCenter = box.getCenter(new THREE.Vector3());
+  const modelCenter = state.center
+    ? state.center.clone()
+    : (state.bounds && !state.bounds.isEmpty()
+      ? state.bounds.getCenter(new THREE.Vector3())
+      : partCenter.clone());
+  const outward = partCenter.clone().sub(modelCenter);
+  const modelSpan = (state.bounds && !state.bounds.isEmpty())
+    ? state.bounds.getSize(new THREE.Vector3()).length()
+    : 0;
+  if (outward.lengthSq() < 1e-12 || (modelSpan > 0 && outward.length() < modelSpan * 0.04)) {
+    return currentViewDir();
+  }
+  return outward.normalize();
+}
+
+function fitTo(box, animate = true, dirOverride = null) {
   if (!box || box.isEmpty()) return;
   camera.up.copy(WORLD_UP);
   const center = box.getCenter(new THREE.Vector3());
-  let dir = camera.position.clone().sub(controls.target);
-  if (dir.lengthSq() < 1e-12) dir.set(1, 0.8, 1);
-  dir.normalize();
+  const dir = dirOverride ? dirOverride.clone().normalize() : currentViewDir();
   moveCamera(center.clone().addScaledVector(dir, distanceToFit(box, dir)), center, animate);
 }
 
+/** Frame a part and rotate to its outside face (Zoom-to-selected behaviour). */
+function fitToPart(box, animate = true) {
+  fitTo(box, animate, viewDirForPart(box));
+}
+
 let camAnim = null;
+// Set on the frame an animated move lands, so the 'change' that
+// controls.update() reports for that frame is not taken for a user move.
+let camAnimJustEnded = false;
 
 function moveCamera(pos, target, animate = true) {
   if (!animate) {
@@ -1049,7 +1106,7 @@ function stepCameraAnim(now) {
   const e = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2; // easeInOutCubic
   camera.position.lerpVectors(camAnim.fromPos, camAnim.toPos, e);
   controls.target.lerpVectors(camAnim.fromTgt, camAnim.toTgt, e);
-  if (k >= 1) camAnim = null;
+  if (k >= 1) { camAnim = null; camAnimJustEnded = true; }
   return true;
 }
 
@@ -1119,16 +1176,18 @@ function setHover(part) {
 
 function selectPart(part, { focus = false, fromTree = false } = {}) {
   if (state.selected === part) {
-    if (focus) fitTo(new THREE.Box3().setFromObject(part.object));
+    if (focus) fitToPart(new THREE.Box3().setFromObject(part.object));
     return;
   }
   // Drop hover before selection so `_hoverMat` cannot be captured as the
   // "original" material when selection stashes `_mat`.
   clearHover();
-  // A sweep-highlight and a single selection both stash the original material on
-  // the same key, and both mark tree rows `selected`. Picking a part ends the
-  // sweep so neither can strip the other's state out from under it.
-  if (state.selectVisibleActive) setSelectVisible(false);
+  // Clear any multi-highlight WITHOUT an intermediate render. Calling
+  // setSelectVisible(false) here used to requestRender once with every
+  // occurrence unpainted, then again with the new pick - that brown flash
+  // (and the dock "Select Visible" bounce) read as the whole machine
+  // deselecting / reselecting.
+  const hadSweep = clearSelectVisiblePaint();
   clearSelection();
   state.selected = part;
   if (part) {
@@ -1142,11 +1201,21 @@ function selectPart(part, { focus = false, fromTree = false } = {}) {
     // the `_mat` stash for the SELECTED part - which is what lets the choice
     // survive moving on to the next part.
     if (state.partTransparentMode) setPartTransparency(part, true);
-    if (focus) fitTo(new THREE.Box3().setFromObject(part.object));
+    if (focus) {
+      fitToPart(new THREE.Box3().setFromObject(part.object));
+      state.zoomedToSelection = true;
+      state.cameraMovedSinceZoom = false;
+    }
     if (!fromTree) revealInTree(part);
   }
   updateSelectionUI();
+  syncDockState();
   requestRender();
+  if (hadSweep) {
+    window.dispatchEvent(new CustomEvent('istp2html:selectvisible', {
+      detail: { active: false, count: 0 },
+    }));
+  }
 }
 
 function clearSelection() {
@@ -1395,8 +1464,7 @@ function applyFilter(query) {
 
 /**
  * Makes every part visible again - isolate and hidden parts released - WITHOUT
- * touching the selection, the sweep or any mode. Show Machine uses this to
- * reveal the machine around the selection it is keeping.
+ * touching the selection, the sweep or any mode. Used by Show All / Home reset.
  */
 function revealAllParts() {
   if (!state.root) return;
@@ -1940,8 +2008,18 @@ function resizeForce() {
   requestRender();
 }
 
-controls.addEventListener('start', markInteracting);
-controls.addEventListener('change', () => { markInteracting(); requestRender(); });
+controls.addEventListener('start', () => {
+  markInteracting();
+  state.cameraMovedSinceZoom = true;
+  if (state.zoomedToSelection) syncDockState();
+});
+controls.addEventListener('change', () => {
+  markInteracting();
+  // Only a USER move ends the zoom toggle. A programmatic fit lerps the camera
+  // too, and TrackballControls reports that as a change just the same.
+  if (!camAnim && !camAnimJustEnded) state.cameraMovedSinceZoom = true;
+  requestRender();
+});
 
 function tick() {
   requestAnimationFrame(tick);
@@ -1951,6 +2029,8 @@ function tick() {
 
   if (stepCameraAnim(now)) dirty = true;
   if (controls.update()) dirty = true;
+  // Cleared only after update() has consumed the animation's final frame.
+  camAnimJustEnded = false;
 
   if (!dirty) return;
   state.needsRender = false;
@@ -2028,10 +2108,20 @@ canvas.addEventListener('pointerup', (e) => {
 
   if (!hit) {
     clearHover();
+    // Empty click clears BOTH the primary pick and any occurrence / select-
+    // visible sweep in one frame, so RSPL multi-highlights do not linger as
+    // a half-deselected state.
+    const hadSweep = clearSelectVisiblePaint();
     clearSelection();
     updateSelectionUI();
+    syncDockState();
     markSelectedRow(null);
     requestRender();
+    if (hadSweep) {
+      window.dispatchEvent(new CustomEvent('istp2html:selectvisible', {
+        detail: { active: false, count: 0 },
+      }));
+    }
     return;
   }
   const part = partFromHit(hit);
@@ -2056,7 +2146,7 @@ window.addEventListener('keydown', (e) => {
   // otherwise fit the selection instead of toggling fullscreen.
   if (k === 'f' && e.shiftKey) { e.preventDefault(); toggleFullscreen(); return; }
   const map = {
-    f: () => (state.selected ? fitTo(new THREE.Box3().setFromObject(state.selected.object)) : fitTo(state.bounds)),
+    f: () => (state.selected ? fitToPart(new THREE.Box3().setFromObject(state.selected.object)) : fitTo(state.bounds)),
     a: () => fitTo(state.bounds),
     '1': () => setView('front'), '2': () => setView('back'),
     '3': () => setView('left'), '4': () => setView('right'),
@@ -2240,12 +2330,19 @@ function toggleNavMode() {
 
 function zoomToSelectionToggle() {
   if (!state.selected) return;
-  if (state.zoomedToSelection) {
+  // Toggle out ONLY when still sitting on the framed selection. If the user
+  // rotated / panned since then, Zoom means "show me this part again" — and
+  // swing the camera to the part's outside face so a 180° orbit does not
+  // leave the part hidden behind the machine.
+  if (state.zoomedToSelection && !state.cameraMovedSinceZoom) {
     fitTo(state.bounds);
     state.zoomedToSelection = false;
   } else {
-    fitTo(new THREE.Box3().setFromObject(state.selected.object));
+    const box = new THREE.Box3().setFromObject(state.selected.object);
+    if (box.isEmpty()) return;
+    fitToPart(box);
     state.zoomedToSelection = true;
+    state.cameraMovedSinceZoom = false;
   }
   syncDockState();
 }
@@ -2261,6 +2358,28 @@ function zoomToSelectionToggle() {
  * own list means "select visible" is a visual sweep that cannot confuse what
  * "the selected part" means.
  */
+/**
+ * Drop the select-visible / occurrence sweep paint without rendering or
+ * firing events. selectPart uses this so switching from a multi-highlight
+ * (e.g. an RSPL row) to a single pick cannot flash one frame of unpainted
+ * CAD colours - or worse, look like the whole machine re-selected - before
+ * the new highlight lands.
+ */
+function clearSelectVisiblePaint() {
+  if (!state.selectVisibleActive && !(state.visibleSelection && state.visibleSelection.length)) {
+    return false;
+  }
+  for (const p of state.visibleSelection) {
+    for (const m of p.meshes) {
+      if (m.userData._mat) { m.material = m.userData._mat; delete m.userData._mat; }
+    }
+    p.object.userData._treeRow?.classList.remove('selected');
+  }
+  state.visibleSelection = [];
+  state.selectVisibleActive = false;
+  return true;
+}
+
 function setSelectVisible(active) {
   if (active === state.selectVisibleActive) return;
   if (active) {
@@ -2275,16 +2394,10 @@ function setSelectVisible(active) {
       }
       p.object.userData._treeRow?.classList.add('selected');
     }
+    state.selectVisibleActive = true;
   } else {
-    for (const p of state.visibleSelection) {
-      for (const m of p.meshes) {
-        if (m.userData._mat) { m.material = m.userData._mat; delete m.userData._mat; }
-      }
-      p.object.userData._treeRow?.classList.remove('selected');
-    }
-    state.visibleSelection = [];
+    clearSelectVisiblePaint();
   }
-  state.selectVisibleActive = active;
   updateSelectionUI();
   syncDockState();
   requestRender();
@@ -2294,7 +2407,7 @@ function setSelectVisible(active) {
   // state could not tell the two apart, and the list would pop open on a tree
   // click. Only the dock sweep announces itself here.
   window.dispatchEvent(new CustomEvent('istp2html:selectvisible', {
-    detail: { active, count: state.visibleSelection.length },
+    detail: { active: !!state.selectVisibleActive, count: state.visibleSelection.length },
   }));
   if (active) toast(`${state.visibleSelection.length} visible part(s) selected`);
 }
@@ -2406,7 +2519,9 @@ function syncDockState() {
     zoom.disabled = !sel;
     zoom.title = !sel
       ? 'Zoom to Selected (select a part first)'
-      : (state.zoomedToSelection ? 'Zoom Out to Model' : 'Zoom to Selected');
+      : (state.zoomedToSelection && !state.cameraMovedSinceZoom
+        ? 'Zoom Out to Model'
+        : 'Zoom to Selected');
   }
 
   // Machine / Part chips carry a droplet when solid and the transparency glyph
@@ -2574,7 +2689,7 @@ function wireUI() {
   });
   $('#opt-shaded-wire')?.addEventListener('change', (e) => { setShadedWire(e.target.checked); });
   $('#opt-tone').addEventListener('change', (e) => setToneMapping(e.target.value));
-  $('#opt-theme').addEventListener('change', (e) => applyTheme(e.target.value));
+  $('#opt-theme')?.addEventListener('change', (e) => applyTheme(e.target.value));
   $('#opt-grid').addEventListener('change', (e) => { grid.visible = e.target.checked; requestRender(); });
   $('#opt-backface').addEventListener('change', (e) => {
     const side = e.target.checked ? THREE.FrontSide : THREE.DoubleSide;
@@ -2687,6 +2802,7 @@ window.iSTP2HTML = {
   setShowMachine,
   toggleShowMachine,
   fitTo,
+  fitToPart,
   setView,
   setShading,
   setToneMapping,
@@ -2702,9 +2818,8 @@ window.iSTP2HTML = {
 };
 
 async function boot() {
-  // Light is the default because that is what the portal's GLB viewer is; the
-  // dark theme stays available from Settings and from --theme.
-  applyTheme(CFG.theme || 'light');
+  // Light only — Dark was removed from Settings to match the portal.
+  applyTheme('light');
   setupEnvironment();
   wireUI();
   setNavMode(state.navMode);      // also performs the first full dock render
@@ -2712,7 +2827,8 @@ async function boot() {
   $('#opt-shading').value = state.shading;
   syncShadedWireUI();
   $('#opt-tone').value = state.tone;
-  $('#opt-theme').value = CFG.theme || 'light';
+  const themeSelect = $('#opt-theme');
+  if (themeSelect) themeSelect.value = 'light';
   $('#opt-grid').checked = CFG.showGrid !== false;
   buildModelSwitcher();
   resize();
