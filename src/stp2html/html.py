@@ -324,6 +324,11 @@ body.legacy-single-file #topbar .brand {
   align-items: center;
   gap: 2px;
   text-align: center;
+  /* Shrink to the title. A stretched box covered the view cube and ate its clicks. */
+  width: max-content;
+  max-width: calc(100vw - 280px);
+  overflow: hidden;
+  pointer-events: none;
 }
 
 body.legacy-single-file #brand-title {
@@ -761,11 +766,32 @@ body.legacy-single-file #axis-note {
   opacity: 0.85;
 }
 
-/* The portal look has no view cube; its minimal colored-edge restyle read as
-   stray red/green/blue marks at the bottom-left. The standard views stay
-   reachable from the keyboard (0-6). */
+/* Standard-view cube. Top-right, clear of the centered title and the bottom
+   toolbar. White buttons so the labels read on the light canvas. */
 body.legacy-single-file #viewcube {
-  display: none !important;
+  display: grid;
+  top: 18px;
+  right: 18px;
+  z-index: 20;
+  grid-template-columns: repeat(3, 52px);
+  gap: 4px;
+}
+
+body.legacy-single-file #viewcube button {
+  height: 28px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid rgba(224, 224, 219, 0.95);
+  background: rgba(255, 255, 255, 0.96);
+  color: #2e2e2c;
+  font-size: 11px;
+  font-weight: 650;
+  box-shadow: 0 4px 12px rgba(21, 31, 43, 0.10);
+}
+
+body.legacy-single-file #viewcube button:hover {
+  color: #1d99d6;
+  border-color: #1d99d6;
 }
 
 body.legacy-single-file .panel {
@@ -778,7 +804,7 @@ body.legacy-single-file .panel {
 body.legacy-single-file #panel-settings,
 body.legacy-single-file #panel-section,
 body.legacy-single-file #panel-help {
-  top: 82px;
+  top: 148px;
   right: 22px;
 }
 
@@ -834,7 +860,8 @@ body.legacy-single-file .legacy-disclaimer {
 
   body.legacy-single-file #topbar .brand {
     top: 18px;
-    width: calc(100% - 120px);
+    width: max-content;
+    max-width: calc(100vw - 280px);
   }
 
   body.legacy-single-file #brand-title {

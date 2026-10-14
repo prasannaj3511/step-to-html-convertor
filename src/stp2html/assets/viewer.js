@@ -906,8 +906,8 @@ function frameBounds() {
   for (const l of [keyLight, fillLight, rimLight]) l.target.position.copy(state.center);
   scene.add(keyLight.target, fillLight.target, rimLight.target);
 
-  // Default load: 3/4 side elevation of a Z-up CAD machine (long axis
-  // left-right on screen). Home captures this pose immediately after.
+  // Opening pose matches the CAD file: Y is up (the STEP's Z), the long
+  // axis runs across the view, and the broad side faces the camera.
   setView('iso', false);
   state.homeView = {
     position: camera.position.clone(),
@@ -934,8 +934,8 @@ function buildGrid() {
 /* -------------------------------------------------------------- view setup */
 
 const VIEW_DIRS = {
-  // 3/4 side elevation: look from +X so the long CAD-Y axis runs left-right.
-  iso: [1, 0.5, -0.22],
+  // Replaced per model in openingViewDir(). This fallback is the long-axis-on-Z case.
+  iso: [1, 0.22, 0.18],
   front: [0, 0, 1],
   back: [0, 0, -1],
   left: [-1, 0, 0],
@@ -948,7 +948,6 @@ const _corner = new THREE.Vector3();
 const _right = new THREE.Vector3();
 const _up = new THREE.Vector3();
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
-const CAD_UP = new THREE.Vector3(0, 0, -1);
 
 /**
  * Exact camera distance needed to fit `box` when viewed along `dir`.
@@ -986,14 +985,29 @@ function distanceToFit(box, dir, margin = 1.06, up = WORLD_UP) {
   return Math.max(dist * margin, radius * 0.01);
 }
 
+/**
+ * Camera offset for the opening / Home view.
+ *
+ * The export is Y-up, which is the STEP file's Z, so the machine stays in the
+ * pose it has in CAD. A fixed +X camera only shows the long side when that
+ * side happens to face X; when the length is along X it looks straight down
+ * the machine and the opening frame is the end. Sit on the shorter horizontal
+ * axis instead, above and toward one end, so the broad side
+ * faces the camera the way it does when the file is opened.
+ */
+function openingViewDir() {
+  const size = state.bounds.getSize(new THREE.Vector3());
+  if (size.x >= size.z) return [-0.85, 0.72, 1];
+  return [1, 0.72, 0.85];
+}
+
 function setView(name, animate = true) {
   // Preset views are canonical - snap the up vector back so a prior
   // free-roll drag (TrackballControls allows rolling, unlike OrbitControls)
   // doesn't leave "Front"/"Top"/etc. looking tilted.
-  // STEP assemblies are Z-up; iso is a 3/4 side elevation so the machine
-  // loads horizontally (long axis left-right), not as a top-down plan.
-  const up = name === 'iso' ? CAD_UP : WORLD_UP;
+  const up = WORLD_UP;
   camera.up.copy(up);
+  if (!name || name === 'iso') VIEW_DIRS.iso = openingViewDir();
   const dir = new THREE.Vector3(...(VIEW_DIRS[name] || VIEW_DIRS.iso)).normalize();
   const target = state.center.clone();
   const pos = target.clone().addScaledVector(dir, distanceToFit(state.bounds, dir, 1.06, up));
@@ -1004,7 +1018,7 @@ function setView(name, animate = true) {
 function currentViewDir() {
   let dir = camera.position.clone().sub(controls.target);
   if (dir.lengthSq() < 1e-12) dir = camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(-1);
-  if (dir.lengthSq() < 1e-12) dir.set(1, 0.5, -0.22);
+  if (dir.lengthSq() < 1e-12) dir.set(...VIEW_DIRS.iso);
   return dir.normalize();
 }
 
@@ -1310,6 +1324,31 @@ function setHover(part, pointer) {
 
 function selectPart(part, { focus = false, fromTree = false } = {}) {
   if (state.selected === part) {
+    // This body is already the primary pick. If an RSPL row or sub-assembly
+    // also painted its other copies, a second click on THIS body drops those
+    // copies and leaves only this one blue. Returning here used to keep the
+    // whole set lit, because nothing observed a selection change.
+    const others = (state.visibleSelection || []).some((p) => p && p !== part);
+    if (others) {
+      clearHover();
+      const hadSweep = clearSelectVisiblePaint();
+      // The sweep restore unpaints this part too when it was in the list.
+      // Put its highlight back before the single render so the CAD colour
+      // never appears for a frame.
+      for (const m of part.meshes || []) {
+        if (!m.userData._mat) m.userData._mat = m.material;
+        m.material = highlightFor(part);
+      }
+      if (part.object && part.object.userData._treeRow) markSelectedRow(part.object.userData._treeRow);
+      updateSelectionUI();
+      syncDockState();
+      requestRender();
+      if (hadSweep) {
+        window.dispatchEvent(new CustomEvent('istp2html:selectvisible', {
+          detail: { active: false, count: 0 },
+        }));
+      }
+    }
     if (focus) fitToPart(new THREE.Box3().setFromObject(part.object));
     return;
   }
